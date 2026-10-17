@@ -177,6 +177,49 @@ class DatabaseMigrationTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_delete_photos_by_filepaths_batch(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                db_path = os.path.join(temp_dir, "photos.db")
+                original_path = database.DB_PATH
+                database.DB_PATH = db_path
+                try:
+                    await database.init_db()
+                    db = await database.get_db()
+                    try:
+                        for i in range(5):
+                            await database.insert_photo(db, {
+                                "filepath": f"202401/photo{i}.jpg",
+                                "filename": f"photo{i}.jpg",
+                                "directory": "202401",
+                                "file_type": "JPG",
+                                "file_size": 100,
+                            })
+
+                        removed = await database.delete_photos_by_filepaths(
+                            db, [f"202401/photo{i}.jpg" for i in range(3)]
+                        )
+                        self.assertEqual(removed, 3)
+
+                        remaining = await db.execute_fetchall(
+                            "SELECT filepath FROM photos ORDER BY filepath"
+                        )
+                        self.assertEqual(
+                            [row[0] for row in remaining],
+                            ["202401/photo3.jpg", "202401/photo4.jpg"],
+                        )
+
+                        # Empty input is a no-op returning 0.
+                        self.assertEqual(
+                            await database.delete_photos_by_filepaths(db, []), 0
+                        )
+                    finally:
+                        await db.close()
+                finally:
+                    database.DB_PATH = original_path
+
+        asyncio.run(run_test())
+
     def test_backfill_skips_real_timestamps_and_redo_sentinels(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as temp_dir:

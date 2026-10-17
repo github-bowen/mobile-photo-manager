@@ -241,10 +241,20 @@ async def get_takeout_sidecar_state(
     )
     return {row[0]: (row[1], row[2]) for row in rows}
 
-async def delete_photo_by_filepath(db: aiosqlite.Connection, filepath: str):
-    """Delete a photo record by filepath."""
-    await db.execute("DELETE FROM photos WHERE filepath = ?", (filepath,))
+async def delete_photos_by_filepaths(db: aiosqlite.Connection, filepaths) -> int:
+    """Delete many photo records in one transaction.
+
+    One executemany + commit instead of a DELETE-and-commit per path — the
+    full-scan path removal used to spend a disk sync per removed file.
+    """
+    paths = list(filepaths)
+    if not paths:
+        return 0
+    await db.executemany(
+        "DELETE FROM photos WHERE filepath = ?", [(path,) for path in paths]
+    )
     await db.commit()
+    return len(paths)
 
 PHOTO_LIST_COLUMNS = _photo_list_columns()
 

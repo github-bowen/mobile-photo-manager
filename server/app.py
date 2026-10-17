@@ -29,7 +29,8 @@ from server.database import (
     init_db, get_db, upsert_photo, update_photo,
     get_photos, get_photo_by_id, get_timeline, get_locations,
     get_photo_count, get_photos_without_thumbnails,
-    get_photos_without_location, get_all_filepaths, delete_photo_by_filepath,
+    get_photos_without_location, get_all_filepaths,
+    delete_photos_by_filepaths,
     backfill_missing_timestamps, get_filepaths_below_scan_version,
     get_takeout_sidecar_state, set_photo_favorite, get_all_file_states
 )
@@ -379,8 +380,8 @@ async def _run_full_scan():
         # Remove missing photos first
         if missing_paths:
             logger.info("Found %d missing files. Removing from database...", len(missing_paths))
-            for path in missing_paths:
-                await delete_photo_by_filepath(db, path)
+            removed = await delete_photos_by_filepaths(db, missing_paths)
+            logger.info("Removed %d stale records.", removed)
 
         # Process new files
         if scan_paths:
