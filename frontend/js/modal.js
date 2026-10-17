@@ -353,6 +353,23 @@ function renderModalInfo(photo) {
       }
   };
   actionsSection.appendChild(viewOriginalBtn);
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.className = "filter-btn";
+  downloadBtn.style.width = "100%";
+  downloadBtn.style.marginTop = "8px";
+  downloadBtn.style.justifyContent = "center";
+  downloadBtn.textContent = "⬇ " + t("download_btn");
+  downloadBtn.onclick = function() {
+      // Content-Disposition: attachment makes the anchor click a save
+      // instead of a navigation, so the modal stays exactly where it is.
+      const a = document.createElement("a");
+      a.href = "/api/photos/" + photo.id + "/file?download=true";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+  };
+  actionsSection.appendChild(downloadBtn);
   modalInfo.appendChild(actionsSection);
 }
 

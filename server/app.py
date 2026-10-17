@@ -11,6 +11,7 @@ import os
 import logging
 import json
 import re
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -721,8 +722,8 @@ async def api_toggle_photo_favorite(photo_id: int, payload: Optional[FavoriteUpd
 
 
 @app.get("/api/photos/{photo_id}/file")
-async def api_get_photo_file(photo_id: int, request: Request):
-    """Serve the original photo file."""
+async def api_get_photo_file(photo_id: int, request: Request, download: bool = Query(False)):
+    """Serve the original photo file (as an attachment when download=true)."""
     db = await get_db()
     try:
         photo = await get_photo_by_id(db, photo_id)
@@ -760,13 +761,26 @@ async def api_get_photo_file(photo_id: int, request: Request):
         }
         media_type = media_types.get(ext, "application/octet-stream")
 
+        # HTTP header values are latin-1: a raw non-ASCII filename raises
+        # UnicodeEncodeError (a 500) inside starlette. Carry the real name
+        # via RFC 5987 filename* and keep filename= as the ASCII fallback.
+        fallback = (photo["filename"]
+                    .encode("ascii", "replace").decode("ascii")
+                    .replace('"', "'").replace("\\", "_"))
+        quoted_name = urllib.parse.quote(photo["filename"])
+        kind = "attachment" if download else "inline"
+        disposition = (
+            f'{kind}; filename="{fallback}"; '
+            f"filename*=UTF-8''{quoted_name}"
+        )
+
         return FileResponse(
             full_path,
             media_type=media_type,
             headers={
                 "Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}",
                 "ETag": etag,
-                "Content-Disposition": f'inline; filename="{photo["filename"]}"'
+                "Content-Disposition": disposition,
             }
         )
     finally:
