@@ -111,32 +111,6 @@
 
   <!-- Photo Detail Modal -->
   <div class="modal-backdrop" id="modal-backdrop" role="dialog" aria-modal="true" aria-label="Photo viewer" data-i18n-aria="photo_dialog">
-    <div id="modal-autoplay-toolbar" class="modal-autoplay-toolbar">
-      <div class="mat-header">
-        <span class="mat-title" data-i18n="autoplay_title">▶ 自动播放 / Slideshow</span>
-        <button id="modal-autoplay-toggle" class="mat-play-btn" title="Toggle Slideshow">▶</button>
-      </div>
-      <div class="mat-controls">
-        <div class="mat-duration">
-          <label data-i18n="autoplay_duration_lbl">停留时长:</label>
-          <input type="range" id="modal-autoplay-duration" value="3" min="1" max="10" step="1">
-          <span id="modal-autoplay-dur-val">3s</span>
-        </div>
-        <label class="mat-wait-label">
-          <input type="checkbox" id="modal-autoplay-wait-video" checked>
-          <span data-i18n="autoplay_wait_video">播完视频再切换</span>
-        </label>
-        
-        <div class="mat-duration">
-          <label data-i18n="autoplay_direction">方向:</label>
-          <select id="modal-autoplay-direction" class="mat-select">
-            <option value="forward" data-i18n="autoplay_dir_forward">向后播放 (→)</option>
-            <option value="backward" data-i18n="autoplay_dir_backward">向前播放 (←)</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
     <button class="modal-close" id="modal-close" data-i18n-title="close_btn">✕</button>
     <div class="modal-content">
       <div class="modal-image-container" id="modal-image-container">
@@ -151,6 +125,33 @@
       </div>
       <div class="modal-info" id="modal-info">
         <!-- Photo details will be inserted here dynamically -->
+        <!-- Slideshow controls live at the top of the info panel (not
+             floating over the photo); modal.js re-seats this node after
+             each per-photo re-render of the panel. -->
+        <div id="modal-autoplay-toolbar" class="modal-autoplay-toolbar">
+          <div class="mat-header">
+            <span class="mat-title" data-i18n="autoplay_title">▶ 自动播放 / Slideshow</span>
+            <button id="modal-autoplay-toggle" class="mat-play-btn" title="Toggle Slideshow">▶</button>
+          </div>
+          <div class="mat-controls">
+            <div class="mat-duration">
+              <label data-i18n="autoplay_duration_lbl">停留时长:</label>
+              <input type="range" id="modal-autoplay-duration" value="3" min="1" max="10" step="1">
+              <span id="modal-autoplay-dur-val">3s</span>
+            </div>
+            <label class="mat-wait-label">
+              <input type="checkbox" id="modal-autoplay-wait-video" checked>
+              <span data-i18n="autoplay_wait_video">播完视频再切换</span>
+            </label>
+            <div class="mat-duration">
+              <label data-i18n="autoplay_direction">方向:</label>
+              <select id="modal-autoplay-direction" class="mat-select">
+                <option value="forward" data-i18n="autoplay_dir_forward">向后播放 (→)</option>
+                <option value="backward" data-i18n="autoplay_dir_backward">向前播放 (←)</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

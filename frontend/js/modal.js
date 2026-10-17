@@ -55,12 +55,12 @@ export function closeModal() {
   });
   modalImageContainer.classList.remove("has-video");
 
-  // The slideshow strip is a permanent backdrop child - no rescue needed,
-  // just hide it until the next photo opens.
+  // The info panel owns the slideshow strip as its first child; wipe only
+  // the per-photo details and re-seat the strip so it survives to the
+  // next open (a detached node would no longer be findable by ID).
   const toolbar = $("modal-autoplay-toolbar");
-  if (toolbar) toolbar.classList.remove("visible");
-
   modalInfo.replaceChildren();
+  if (toolbar) modalInfo.appendChild(toolbar);
   // Leave the mobile info drawer closed for the next open.
   modalInfo.classList.remove("open");
 
@@ -209,13 +209,13 @@ export function renderModalContent() {
 function renderModalInfo(photo) {
   const modalInfo = $("modal-info");
   const modalImageContainer = $("modal-image-container");
-  
-  // The slideshow strip stays a direct child of the backdrop; showing it
-  // is a pure class toggle, nothing to move out of the way here.
-  const toolbar = $("modal-autoplay-toolbar");
-  if (toolbar) toolbar.classList.add("visible");
 
+  // The slideshow strip is a static child of the info panel (it must not
+  // cover the photo); the wipe below removes it, so re-seat it right away
+  // — the per-photo details then append after it.
+  const toolbar = $("modal-autoplay-toolbar");
   modalInfo.replaceChildren();
+  if (toolbar) modalInfo.appendChild(toolbar);
 
   const titleContainer = document.createElement("div");
   titleContainer.style.display = "flex";
@@ -536,9 +536,16 @@ export function setupModalEvents() {
       const focusables = Array.from(modalBackdrop.querySelectorAll(
         'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
       )).filter(function (el) {
-        // Hidden controls (e.g. the slideshow toolbar while inactive)
-        // must not be tab stops. offsetParent is null for display:none.
-        return el.offsetParent !== null;
+        // Hidden controls must not be tab stops. offsetParent is null for
+        // display:none, but on phones the info drawer is only translated
+        // off-screen (offsetParent stays non-null), so also drop focusables
+        // inside a closed drawer — its transform is a real translation,
+        // while the always-visible desktop panel has none.
+        if (el.offsetParent === null) return false;
+        const info = el.closest(".modal-info");
+        if (!info) return true;
+        const transform = getComputedStyle(info).transform;
+        return transform === "none" || info.classList.contains("open");
       });
       if (focusables.length === 0) return;
       const first = focusables[0];

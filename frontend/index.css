@@ -1077,28 +1077,20 @@ select:focus-visible,
   word-break: break-all;
 }
 
-/* Slideshow control strip. It stays a permanent direct child of
-   #modal-backdrop (no DOM moves, so rebuilds of the info panel and the
-   mobile drawer can never swallow it) and docks top-center, below the
-   close / favorite control row. .visible is toggled on modal open/close. */
+/* Slideshow controls. They live as the first child of the .modal-info
+   panel — floating them over the photo (the old top-center strip)
+   covered the picture, which is the one thing a viewer must never
+   obscure. The panel re-renders per photo; modal.js re-seats the node,
+   so this stylesheet only owns its looks. */
 .modal-autoplay-toolbar {
-  position: absolute;
-  top: 64px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 15;
-  display: none;
+  display: flex;
   flex-direction: column;
   gap: 10px;
   background: var(--bg-glass, rgba(255,255,255,0.08));
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md, 8px);
-  padding: 10px 14px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-  max-width: min(92vw, 540px);
-}
-.modal-autoplay-toolbar.visible {
-  display: flex;
+  padding: 10px 12px;
+  margin-bottom: var(--space-lg);
 }
 
 .mat-header {
@@ -1118,10 +1110,9 @@ select:focus-visible,
 
 .mat-controls {
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .mat-duration {
