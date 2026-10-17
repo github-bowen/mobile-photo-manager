@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { applyTranslations } from './i18n.js';
 import { updateStats } from './utils.js';
-import { loadPhotos, resetAndReload, setupInfiniteScroll } from './gallery.js';
+import { loadPhotos, resetAndReload, setupInfiniteScroll, requestNextPage } from './gallery.js';
 import { loadTimeline, loadLocations, closeMobileSidebar, resetSidebarTimer } from './sidebar.js';
 import { closeModal, renderModalContent, setupModalEvents } from './modal.js';
 import { initAutoplay } from './autoplay.js';
@@ -22,6 +22,28 @@ async function checkScanStatus() {
     if (status.status === "complete" || status.status === "idle") {
       if (scanBanner) scanBanner.classList.add("hidden");
       if (loadingOverlay) loadingOverlay.classList.add("hidden");
+
+      if (!state.scanComplete) {
+        state.scanComplete = true;
+        state.currentPage = 1;
+        await loadPhotos(false);
+        await loadTimeline();
+        await loadLocations();
+        updateStats();
+      }
+      return;
+    }
+
+    if (status.status === "error") {
+      // The scan failed: stop polling, surface the error, and load whatever
+      // data the database already holds instead of sticking on the overlay.
+      if (loadingOverlay) loadingOverlay.classList.add("hidden");
+      if (scanBanner) {
+        scanBanner.classList.remove("hidden");
+        if (scanBannerText) scanBannerText.textContent = status.message || "Scan failed";
+        if (scanBannerProgress) scanBannerProgress.style.width = "100%";
+        setTimeout(function () { scanBanner.classList.add("hidden"); }, 10000);
+      }
 
       if (!state.scanComplete) {
         state.scanComplete = true;
@@ -129,8 +151,7 @@ function setupFilters() {
   const loadMoreBtn = $("load-more-btn");
   if (loadMoreBtn) {
     loadMoreBtn.addEventListener("click", function () {
-      state.currentPage++;
-      loadPhotos(true);
+      requestNextPage();
     });
   }
 }

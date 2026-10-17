@@ -11,7 +11,7 @@ function initVirtualization() {
   if (galleryObserver) {
     galleryObserver.disconnect();
   }
-  
+
   galleryObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       const card = entry.target;
@@ -27,8 +27,7 @@ function initVirtualization() {
       } else {
         if (card.hasAttribute('data-rendered')) {
           // Unload DOM elements to save memory (DOM Virtualization)
-          card.replaceChildren();
-          card.removeAttribute('data-rendered');
+          unloadCardContent(card);
         }
       }
     });
@@ -37,6 +36,24 @@ function initVirtualization() {
     rootMargin: '600px 0px', // Buffer zone to prevent flashing
     threshold: 0
   });
+}
+
+export function unloadCardContent(card) {
+  // Clear any pending hover-preview timer so it can't attach a zombie
+  // <video> to a card that just left the viewport.
+  if (card.__hoverTimer) {
+    clearTimeout(card.__hoverTimer);
+    card.__hoverTimer = null;
+  }
+  const video = card.querySelector("video");
+  if (video) {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.remove();
+  }
+  card.replaceChildren();
+  card.removeAttribute("data-rendered");
 }
 
 function renderCardContent(card, photo) {
@@ -89,51 +106,58 @@ function renderCardContent(card, photo) {
     toggleFavorite(photo, favBtn, card);
   });
   card.appendChild(favBtn);
-
-  if ((photo.is_live_photo && photo.live_photo_mov) || photo.is_motion_photo) {
-    let hoverTimeout;
-    card.addEventListener("mouseenter", function () {
-      hoverTimeout = setTimeout(() => {
-        if (!card.querySelector("video")) {
-          const video = document.createElement("video");
-          video.muted = true;
-          video.loop = true;
-          video.playsInline = true;
-          video.src = "/api/photos/" + photo.id +
-            (photo.is_motion_photo ? "/motion-video" : "/live-video");
-          video.play().catch(function () {});
-          card.appendChild(video);
-        } else {
-          const v = card.querySelector("video");
-          if (v) v.play().catch(function () {});
-        }
-      }, 200);
-    });
-
-    card.addEventListener("mouseleave", function () {
-      clearTimeout(hoverTimeout);
-      const v = card.querySelector("video");
-      if (v) {
-        v.pause();
-        v.removeAttribute("src");
-        v.load();
-        v.remove();
-      }
-    });
-  }
 }
 
 function createPhotoCard(photo) {
   const card = document.createElement("div");
   card.className = "photo-card";
   card.setAttribute("data-id", photo.id);
-  
+
   card.addEventListener("click", function () {
     const idx = state.photos.findIndex(function (p) { return p.id === photo.id; });
     if (idx >= 0) {
       openModal(idx);
     }
   });
+
+  // Hover-preview listeners are registered once per card (not on every
+  // content render) so virtualized re-renders can't stack duplicate
+  // handlers. The timer handle lives on the card itself, where
+  // unloadCardContent can clear it.
+  if ((photo.is_live_photo && photo.live_photo_mov) || photo.is_motion_photo) {
+    card.addEventListener("mouseenter", function () {
+      card.__hoverTimer = setTimeout(function () {
+        const existing = card.querySelector("video");
+        if (existing) {
+          existing.play().catch(function () {});
+          return;
+        }
+        if (!card.hasAttribute("data-rendered")) return;
+        const video = document.createElement("video");
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.src = "/api/photos/" + photo.id +
+          (photo.is_motion_photo ? "/motion-video" : "/live-video");
+        video.play().catch(function () {});
+        card.appendChild(video);
+      }, 200);
+    });
+
+    card.addEventListener("mouseleave", function () {
+      if (card.__hoverTimer) {
+        clearTimeout(card.__hoverTimer);
+        card.__hoverTimer = null;
+      }
+      const video = card.querySelector("video");
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        video.remove();
+      }
+    });
+  }
 
   if (galleryObserver) {
     galleryObserver.observe(card);
@@ -191,14 +215,14 @@ export function renderGallery(append) {
 
       const label = document.createElement("div");
       label.className = "gallery-date-label";
-      
+
       let locText = "";
       const locationSets = {};
       for (const photo of photos) {
           if (!photo.display_location) continue;
           const partsDisp = photo.display_location.split(", ");
           if (partsDisp.length < 2) continue;
-          
+
           let country = partsDisp[partsDisp.length - 1].trim();
           let city = partsDisp[0];
           if (city.includes(" (")) city = city.split(" (")[0];
@@ -213,7 +237,7 @@ export function renderGallery(append) {
           if (!locationSets[country]) locationSets[country] = new Set();
           locationSets[country].add(city);
       }
-      
+
       const locStrings = [];
       for (const [country, citiesSet] of Object.entries(locationSets)) {
           const cities = Array.from(citiesSet);
@@ -317,7 +341,11 @@ export async function loadPhotos(append) {
     renderGallery(append);
     updateLoadMoreButton();
   } catch (e) {
-    if (!append) {
+    if (append) {
+      // Roll the page counter back so the failed page is retried
+      // instead of being silently skipped.
+      state.currentPage = Math.max(1, state.currentPage - 1);
+    } else {
       gallery.replaceChildren();
       const emptyEl = createEmptyState("⚠️", t("failed_load"), t("try_again"));
       gallery.appendChild(emptyEl);
@@ -333,16 +361,41 @@ export function resetAndReload() {
   loadPhotos(false);
 }
 
+export async function requestNextPage() {
+  // Single entry point for advancing a page: guards loading state and the
+  // last-page boundary so concurrent callers (infinite scroll, modal
+  // navigation, slideshow, load-more button) can't double-increment.
+  if (state.loading) return false;
+  if (state.currentPage >= state.totalPages) return false;
+  state.currentPage++;
+  await loadPhotos(true);
+  return true;
+}
+
 export function setupInfiniteScroll() {
   const galleryContainer = $("gallery-container");
   galleryContainer.addEventListener("scroll", function () {
-    if (state.loading || state.currentPage >= state.totalPages) return;
     const scrollBottom = galleryContainer.scrollHeight - galleryContainer.scrollTop - galleryContainer.clientHeight;
     if (scrollBottom < 800) { // increased threshold slightly for smoother scroll
-      state.currentPage++;
-      loadPhotos(true);
+      requestNextPage();
     }
   });
+}
+
+export function syncFilterUI() {
+  // Reflect state (filters, dates, sort) back into the header controls.
+  // Used after the slideshow config rewrites state behind their back.
+  document.querySelectorAll(".filter-group .filter-btn").forEach(function (btn) {
+    btn.classList.toggle("active", btn.dataset.filter === state.activeFilter);
+  });
+
+  const dateFromInput = $("date-from");
+  const dateToInput = $("date-to");
+  if (dateFromInput) dateFromInput.value = state.dateFrom || "";
+  if (dateToInput) dateToInput.value = state.dateTo || "";
+
+  const sortToggle = $("sort-toggle");
+  if (sortToggle) sortToggle.classList.toggle("active", state.sortOrder === "asc");
 }
 
 export async function toggleFavorite(photo, favBtn, card) {

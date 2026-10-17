@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { t } from './i18n.js';
 import { $, formatDate, formatTime, formatFileSize, formatDuration } from './utils.js';
 import { isAutoplaying, startAutoplayFromCurrent, stopAutoplay } from './autoplay.js';
-import { loadPhotos } from './gallery.js';
+import { requestNextPage } from './gallery.js';
 
 const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
 
@@ -48,9 +48,8 @@ export async function nextModalPhoto() {
     state.modalPhotoIndex++;
     renderModalContent();
   } else if (state.currentPage < state.totalPages) {
-    state.currentPage++;
-    await loadPhotos(true);
-    if (state.modalPhotoIndex < state.photos.length - 1) {
+    const loaded = await requestNextPage();
+    if (loaded && state.modalPhotoIndex < state.photos.length - 1) {
       state.modalPhotoIndex++;
       renderModalContent();
     }

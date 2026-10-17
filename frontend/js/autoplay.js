@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { $ } from './utils.js';
-import { resetAndReload, loadPhotos } from './gallery.js';
+import { loadPhotos, requestNextPage } from './gallery.js';
 import { openModal, closeModal, renderModalContent } from './modal.js';
 import { t } from './i18n.js';
 
@@ -224,8 +224,7 @@ async function autoplayLoop() {
     if (state.modalPhotoIndex >= state.photos.length - 1) {
       // Reached the end of current page
       if (state.currentPage < state.totalPages) {
-        state.currentPage++;
-        await loadPhotos(true);
+        await requestNextPage();
       } else {
         // Reached the end of all photos
         stopAutoplay();
