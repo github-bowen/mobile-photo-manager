@@ -48,11 +48,13 @@ export function closeModal() {
   modalBackdrop.classList.remove("active");
   document.body.style.overflow = "";
 
-  const existing = modalImageContainer.querySelectorAll(".modal-media, img, video");
+  const existing = modalImageContainer.querySelectorAll(
+    ".modal-media, img, video, .modal-top-fav-btn, .modal-action-bar");
   existing.forEach(function (el) {
     if (el.tagName === "VIDEO") el.pause();
     el.remove();
   });
+  modalImageContainer.classList.remove("has-video");
 
   // Rescue toolbar before clearing info
   const toolbar = document.getElementById("modal-autoplay-toolbar");
@@ -61,6 +63,8 @@ export function closeModal() {
   }
 
   modalInfo.replaceChildren();
+  // Leave the mobile info drawer closed for the next open.
+  modalInfo.classList.remove("open");
 
   // Return focus to whatever opened the modal (if it is still in the DOM —
   // pooled/recycled cards may have been swapped out while it was open).
@@ -111,6 +115,10 @@ export function renderModalContent() {
     if (el.tagName === "VIDEO") el.pause();
     el.remove();
   });
+
+  // Videos carry their native controls along the bottom edge; reserve
+  // room so the pinned action bar never sits on top of them.
+  modalImageContainer.classList.toggle("has-video", VIDEO_TYPES.has(photo.file_type));
 
   if (VIDEO_TYPES.has(photo.file_type)) {
     const video = document.createElement("video");
@@ -304,8 +312,6 @@ function renderModalInfo(photo) {
     modalInfo.appendChild(tagsSection);
   }
 
-  const actionsSection = createInfoSection(t("actions_sec"));
-
   const topFavBtn = document.createElement("button");
   topFavBtn.className = "modal-top-fav-btn" + (photo.is_favorite ? " active" : "");
   topFavBtn.setAttribute("type", "button");
@@ -313,34 +319,38 @@ function renderModalInfo(photo) {
   topFavBtn.title = favTitle;
   topFavBtn.setAttribute("aria-label", favTitle);
   topFavBtn.innerHTML = photo.is_favorite ? "★" : "☆";
-
-  const favActionBtn = document.createElement("button");
-  favActionBtn.className = "filter-btn modal-fav-btn" + (photo.is_favorite ? " active" : "");
-  favActionBtn.style.width = "100%";
-  favActionBtn.style.marginTop = "8px";
-  favActionBtn.style.justifyContent = "center";
-  favActionBtn.innerHTML = photo.is_favorite 
-    ? `⭐ ${t("unfavorite_btn")}` 
-    : `☆ ${t("favorite_btn")}`;
-
   topFavBtn.onclick = (e) => {
     e.stopPropagation();
     toggleFavorite(photo);
   };
-  favActionBtn.onclick = () => toggleFavorite(photo);
-
   modalImageContainer.appendChild(topFavBtn);
-  actionsSection.appendChild(favActionBtn);
+
+  // Action bar pinned to the bottom of the image area, present on every
+  // breakpoint: mobile used to lose these entirely (the info panel was
+  // display:none there); now the panel is a toggleable drawer and the
+  // actions live outside it. Rebuilt each render so it rebinds to the
+  // current photo.
+  const oldBar = modalImageContainer.querySelector(".modal-action-bar");
+  if (oldBar) oldBar.remove();
+
+  const actionBar = document.createElement("div");
+  actionBar.className = "modal-action-bar";
+
+  const favActionBtn = document.createElement("button");
+  favActionBtn.className = "modal-action-btn modal-fav-btn" + (photo.is_favorite ? " active" : "");
+  favActionBtn.setAttribute("type", "button");
+  favActionBtn.innerHTML = photo.is_favorite ? "★" : "☆";
+  favActionBtn.title = favTitle;
+  favActionBtn.setAttribute("aria-label", favTitle);
+  favActionBtn.onclick = () => toggleFavorite(photo);
+  actionBar.appendChild(favActionBtn);
 
   const viewOriginalBtn = document.createElement("button");
-  viewOriginalBtn.className = "filter-btn";
-  viewOriginalBtn.style.width = "100%";
-  viewOriginalBtn.style.marginTop = "8px";
-  viewOriginalBtn.style.justifyContent = "center";
-  viewOriginalBtn.style.background = "var(--accent-gradient)";
-  viewOriginalBtn.style.color = "#fff";
-  viewOriginalBtn.style.border = "none";
-  viewOriginalBtn.textContent = t("view_original");
+  viewOriginalBtn.className = "modal-action-btn";
+  viewOriginalBtn.setAttribute("type", "button");
+  viewOriginalBtn.textContent = "🖼";
+  viewOriginalBtn.title = t("view_original");
+  viewOriginalBtn.setAttribute("aria-label", t("view_original"));
   viewOriginalBtn.onclick = function() {
       if (VIDEO_TYPES.has(photo.file_type)) {
            window.open("/api/photos/" + photo.id + "/file", "_blank");
@@ -349,34 +359,37 @@ function renderModalInfo(photo) {
                window.open("/api/photos/" + photo.id + "/file", "_blank");
                return;
            }
-           viewOriginalBtn.textContent = t("loading");
            viewOriginalBtn.disabled = true;
            viewOriginalBtn.style.opacity = "0.7";
-           
+
            const imgElement = modalImageContainer.querySelector("img");
            if (imgElement) {
                const newImg = new Image();
                newImg.onload = () => {
                    imgElement.src = newImg.src;
-                   viewOriginalBtn.textContent = t("view_original") + t("original_loaded");
-               };
-               newImg.onerror = () => {
-                   viewOriginalBtn.textContent = t("load_error");
                    viewOriginalBtn.disabled = false;
                    viewOriginalBtn.style.opacity = "1";
+               };
+               newImg.onerror = () => {
+                   viewOriginalBtn.disabled = false;
+                   viewOriginalBtn.style.opacity = "1";
+                   // The swap itself is the success feedback; on failure
+                   // the only place left to report is the button title.
+                   viewOriginalBtn.title = t("load_error");
+                   viewOriginalBtn.setAttribute("aria-label", t("load_error"));
                };
                newImg.src = "/api/photos/" + photo.id + "/render";
            }
       }
   };
-  actionsSection.appendChild(viewOriginalBtn);
+  actionBar.appendChild(viewOriginalBtn);
 
   const downloadBtn = document.createElement("button");
-  downloadBtn.className = "filter-btn";
-  downloadBtn.style.width = "100%";
-  downloadBtn.style.marginTop = "8px";
-  downloadBtn.style.justifyContent = "center";
-  downloadBtn.textContent = "⬇ " + t("download_btn");
+  downloadBtn.className = "modal-action-btn";
+  downloadBtn.setAttribute("type", "button");
+  downloadBtn.textContent = "⬇";
+  downloadBtn.title = t("download_btn");
+  downloadBtn.setAttribute("aria-label", t("download_btn"));
   downloadBtn.onclick = function() {
       // Content-Disposition: attachment makes the anchor click a save
       // instead of a navigation, so the modal stays exactly where it is.
@@ -386,8 +399,27 @@ function renderModalInfo(photo) {
       a.click();
       a.remove();
   };
-  actionsSection.appendChild(downloadBtn);
-  modalInfo.appendChild(actionsSection);
+  actionBar.appendChild(downloadBtn);
+
+  // Mobile only (hidden past the 900px breakpoint): pulls up the info
+  // drawer. On desktop the info panel is always visible, so there is
+  // nothing to toggle.
+  const detailsBtn = document.createElement("button");
+  detailsBtn.className = "modal-action-btn modal-action-bar-details";
+  detailsBtn.setAttribute("type", "button");
+  detailsBtn.textContent = "ⓘ";
+  detailsBtn.title = t("details_btn");
+  detailsBtn.setAttribute("aria-label", t("details_btn"));
+  // The drawer keeps its open/closed state across photo navigation, so
+  // read the real state instead of assuming closed on each rebuild.
+  detailsBtn.setAttribute("aria-expanded", String(modalInfo.classList.contains("open")));
+  detailsBtn.onclick = function () {
+    const open = modalInfo.classList.toggle("open");
+    detailsBtn.setAttribute("aria-expanded", String(open));
+  };
+  actionBar.appendChild(detailsBtn);
+
+  modalImageContainer.appendChild(actionBar);
 }
 
 function createInfoSection(titleText) {
@@ -438,9 +470,10 @@ document.addEventListener("favorite-changed", function (e) {
   const favActionBtn = document.querySelector(".modal-fav-btn");
   if (favActionBtn) {
     favActionBtn.classList.toggle("active", isFavorite);
-    favActionBtn.innerHTML = isFavorite
-      ? `⭐ ${t("unfavorite_btn")}`
-      : `☆ ${t("favorite_btn")}`;
+    favActionBtn.innerHTML = isFavorite ? "★" : "☆";
+    const title = isFavorite ? t("unfavorite_btn") : t("favorite_btn");
+    favActionBtn.title = title;
+    favActionBtn.setAttribute("aria-label", title);
   }
 });
 
@@ -478,6 +511,16 @@ export function setupModalEvents() {
 
   if (modalBackdrop) {
     modalBackdrop.addEventListener("click", function (e) {
+      const drawer = $("modal-info");
+      if (drawer && drawer.classList.contains("open") &&
+          !drawer.contains(e.target) &&
+          !(e.target.closest && e.target.closest(".modal-action-bar"))) {
+        // On phones the info panel is a slide-up drawer; a tap outside
+        // it dismisses the drawer first, like any scrim, instead of
+        // falling through and closing the whole modal.
+        drawer.classList.remove("open");
+        return;
+      }
       if (e.target === modalBackdrop || e.target === modalImageContainer) {
         closeModal();
       }

@@ -973,15 +973,73 @@ select:focus-visible,
   border-color: transparent;
 }
 
+/* Action bar pinned over the bottom of the modal image. It holds the
+   actions that used to live only in the side panel — which phones
+   couldn't see at all (the panel was display:none below 900px). */
+.modal-action-bar {
+  position: absolute;
+  bottom: var(--space-md);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm);
+  z-index: 12;
+}
+
+.modal-action-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  transition: all var(--transition-fast);
+}
+
+.modal-action-btn:hover {
+  background: var(--bg-glass-hover);
+}
+
+.modal-action-btn:disabled {
+  cursor: default;
+}
+
+/* Keep the bar clear of a video's native control strip. */
+.modal-image-container.has-video {
+  padding-bottom: 64px;
+}
+
+/* Desktop always shows the info side panel, so the drawer toggle is a
+   mobile-only affordance. */
+.modal-action-bar-details {
+  display: none;
+}
+
 /* Modal Sidebar (EXIF info) */
 .modal-info {
   width: 320px;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-subtle);
   border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
-  padding: var(--space-lg);
+  padding: var(--space-xl);
   overflow-y: auto;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-info-title {
@@ -1282,8 +1340,40 @@ select:focus-visible,
     width: 100%;
     justify-content: space-between;
   }
+  /* Phones: the modal stacks vertically and the info panel becomes a
+     drawer sliding up over the image, toggled by the ⓘ button in the
+     action bar. It used to be display:none here, which silently
+     dropped EXIF, favorite and download on mobile. */
+  .modal-content {
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .modal-image-container {
+    min-height: 0;
+  }
   .modal-info {
-    display: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 60vh;
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    transform: translateY(100%);
+    transition: transform var(--transition-normal);
+    z-index: 11;
+    /* The action bar floats above the open drawer; keep the drawer's
+       own content clear of the bar zone. */
+    padding-bottom: 76px;
+  }
+  .modal-info.open {
+    transform: translateY(0);
+  }
+  .modal-action-bar-details {
+    display: flex;
   }
   .gallery-grid {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
@@ -1721,14 +1811,9 @@ input[type="checkbox"] {
   right: 20px;
 }
 
-/* Improve Info Panel layout */
-.modal-info {
-  background: var(--bg-secondary);
-  border-left: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-xl);
-}
+/* Improve Info Panel layout — merged into the base .modal-info block
+   above so it cannot override the mobile drawer rules in the
+   max-width:900px media query. */
 
 
 /* Enhanced Wait for Video Checkbox */
