@@ -77,6 +77,7 @@ MIGRATIONS = {
     "takeout_metadata": "INTEGER DEFAULT 0",
     "takeout_sidecar": "TEXT",
     "takeout_sidecar_mtime_ns": "INTEGER",
+    "file_mtime_ns": "INTEGER",
 }
 
 
@@ -172,6 +173,12 @@ async def get_all_filepaths(db: aiosqlite.Connection) -> set[str]:
     """Get all filepaths currently in the database."""
     rows = await db.execute_fetchall("SELECT filepath FROM photos")
     return {row[0] for row in rows}
+
+
+async def get_all_file_states(db: aiosqlite.Connection) -> dict[str, Optional[int]]:
+    """Map filepath -> stored file_mtime_ns (None for pre-migration rows)."""
+    rows = await db.execute_fetchall("SELECT filepath, file_mtime_ns FROM photos")
+    return {row[0]: row[1] for row in rows}
 
 
 async def get_filepaths_below_scan_version(

@@ -276,21 +276,57 @@ def _determine_taken_at(filepath: str, exif_date: Optional[str] = None) -> str:
     return f"{year}-{month}-99T23:59:59"
 
 
+def get_all_file_states_on_disk(photos_dir: str) -> dict[str, tuple[int, int]]:
+    """Walk the photos dir; return {rel_path: (mtime_ns, size)} for valid media."""
+    states: dict[str, tuple[int, int]] = {}
+    real_dir = os.path.realpath(photos_dir)
+
+    # os.scandir keeps the stat info from the same directory read, so the
+    # walk reports mtime/size without one extra lstat syscall per file.
+    stack = [real_dir]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir():
+                            stack.append(entry.path)
+                        elif entry.is_file():
+                            if os.path.splitext(entry.name)[1].lower() in SUPPORTED_EXTENSIONS:
+                                info = entry.stat()
+                                states[os.path.relpath(entry.path, real_dir)] = (
+                                    info.st_mtime_ns,
+                                    info.st_size,
+                                )
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return states
+
+
 def get_all_files_on_disk(photos_dir: str) -> set[str]:
     """Fast recursive directory traversal to get all valid photo file paths."""
-    valid_paths = set()
-    photos_dir = os.path.realpath(photos_dir)
+    return set(get_all_file_states_on_disk(photos_dir))
 
-    for root, _, files in os.walk(photos_dir):
-        for fname in sorted(files):
-            ext = os.path.splitext(fname)[1].upper()
-            if ext.lower() in SUPPORTED_EXTENSIONS:
-                filepath = os.path.join(root, fname)
-                if os.path.isfile(filepath):
-                    rel_path = os.path.relpath(filepath, photos_dir)
-                    valid_paths.add(rel_path)
-                    
-    return valid_paths
+
+def detect_changed_files(
+    disk_states: dict[str, tuple[int, int]],
+    db_states: dict,
+) -> set[str]:
+    """Paths whose stored mtime no longer matches disk (content replaced).
+
+    Rows with a NULL stored mtime predate change tracking and are skipped on
+    purpose: treating NULL as "changed" would rescan the entire library the
+    first time this column appears.
+    """
+    return {
+        path for path, mtime in db_states.items()
+        if mtime is not None
+        and path in disk_states
+        and disk_states[path][0] != mtime
+    }
 
 
 def _decode_user_comment(val) -> Optional[str]:
@@ -439,6 +475,7 @@ def _scan_single_file(
         "directory": subdir_name,
         "file_type": file_type,
         "file_size": stat.st_size,
+        "file_mtime_ns": stat.st_mtime_ns,
         "scan_version": SCAN_VERSION,
         "is_live_photo": 0,
         "live_photo_mov": None,

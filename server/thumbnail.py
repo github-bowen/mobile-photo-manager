@@ -55,6 +55,19 @@ def thumbnail_exists(filepath: str, size: str) -> bool:
     return os.path.exists(get_thumbnail_path(filepath, size))
 
 
+def invalidate_thumbnail(filepath: str) -> None:
+    """Delete both sizes of a thumbnail so a changed file gets re-generated.
+
+    Render-cache keys embed the file's mtime (see app.api_get_photo_render),
+    so only the plain thumbnails need explicit removal.
+    """
+    for size_name in SIZES:
+        try:
+            os.remove(get_thumbnail_path(filepath, size_name))
+        except OSError:
+            pass  # missing file: nothing to invalidate
+
+
 def generate_thumbnail(photo_id: int, filepath: str, file_type: str) -> bool:
     """
     Generate thumbnails for a photo at all sizes.

@@ -5,6 +5,7 @@ and thumbnail serving.
 """
 
 import asyncio
+import glob
 import os
 import logging
 import mimetypes
@@ -30,13 +31,13 @@ from server.database import (
     get_photo_count, get_photos_without_thumbnails,
     get_photos_without_location, get_all_filepaths, delete_photo_by_filepath,
     backfill_missing_timestamps, get_filepaths_below_scan_version,
-    get_takeout_sidecar_state, set_photo_favorite
+    get_takeout_sidecar_state, set_photo_favorite, get_all_file_states
 )
 from server.scanner import (
-    SCAN_VERSION, build_takeout_sidecar_indexes, get_all_files_on_disk,
-    get_takeout_sidecar_state_on_disk, scan_specific_files
+    SCAN_VERSION, build_takeout_sidecar_indexes, get_all_file_states_on_disk,
+    get_takeout_sidecar_state_on_disk, scan_specific_files, detect_changed_files
 )
-from server.thumbnail import generate_thumbnail, get_thumbnail_path, thumbnail_exists
+from server.thumbnail import generate_thumbnail, get_thumbnail_path, thumbnail_exists, invalidate_thumbnail
 from server.geocoder import reverse_geocode, batch_reverse_geocode
 
 # Configure logging
@@ -219,10 +220,12 @@ async def _run_full_scan():
         # Phase 1: Fast directory traversal
         logger.info("Phase 1: Scanning file tree...")
         db = await get_db()
-        
-        disk_paths = await asyncio.to_thread(get_all_files_on_disk, PHOTOS_DIR)
+
+        disk_states = await asyncio.to_thread(get_all_file_states_on_disk, PHOTOS_DIR)
+        disk_paths = set(disk_states)
         existing_paths = await get_all_filepaths(db)
-        
+        db_mtimes = await get_all_file_states(db)
+
         missing_paths = existing_paths - disk_paths
         new_paths = disk_paths - existing_paths
         stale_paths = await get_filepaths_below_scan_version(db, SCAN_VERSION)
@@ -238,13 +241,34 @@ async def _run_full_scan():
             if current_sidecars.get(path, (None, None))
             != stored_sidecars.get(path, (None, None))
         }
-        scan_paths = new_paths | (stale_paths & disk_paths) | sidecar_changed_paths
-        
+        # Content change detection: a stored mtime that no longer matches
+        # disk means the file was replaced. NULL mtimes (pre-tracking rows)
+        # are skipped by detect_changed_files itself.
+        changed_paths = detect_changed_files(disk_states, db_mtimes)
+        scan_paths = new_paths | (stale_paths & disk_paths) | sidecar_changed_paths | changed_paths
+
         scan_state["total"] = len(scan_paths)
         scan_state["message"] = (
             f"Found {len(new_paths)} new and {len(scan_paths - new_paths)} changed files. "
             "Updating index..."
         )
+
+        # Drop cached thumbnails for changed files so they are re-generated
+        # with fresh content, and re-queue them for the thumbnail phase.
+        if changed_paths:
+            logger.info("Detected %d changed files. Invalidating caches...", len(changed_paths))
+            await asyncio.to_thread(
+                lambda: [invalidate_thumbnail(path) for path in changed_paths]
+            )
+            paths = sorted(changed_paths)
+            for i in range(0, len(paths), 500):
+                chunk = paths[i:i + 500]
+                placeholders = ",".join("?" * len(chunk))
+                await db.execute(
+                    f"UPDATE photos SET has_thumbnail = 0 WHERE filepath IN ({placeholders})",
+                    chunk,
+                )
+            await db.commit()
 
         # Remove missing photos first
         if missing_paths:
@@ -558,6 +582,27 @@ async def api_get_photo_file(photo_id: int):
     finally:
         await db.close()
 
+def _cleanup_old_renders(render_dir: str, photo_id: int, current_path: str) -> None:
+    """Remove renders of the same photo keyed on older mtimes (and the legacy key).
+
+    The {photo_id}_* prefix is exact enough to never match a different id —
+    a glob for "12_*" cannot hit "123_..." — and a fresh render is always
+    followed by at most a handful of stale files, never two.
+    """
+    candidates = glob.glob(os.path.join(render_dir, f"{photo_id}_*.jpg"))
+    legacy = os.path.join(render_dir, f"{photo_id}.jpg")
+    if legacy != current_path and os.path.exists(legacy):
+        candidates.append(legacy)
+    for path in candidates:
+        # The glob matches the freshly written current key too — keep it.
+        if path == current_path:
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 @app.get("/api/photos/{photo_id}/render")
 async def api_get_photo_render(photo_id: int):
     """Render the full-quality original photo in a browser-supported format (JPEG)."""
@@ -592,8 +637,16 @@ async def api_get_photo_render(photo_id: int):
         from server.thumbnail import THUMBNAIL_DIR
         render_dir = os.path.join(THUMBNAIL_DIR, "render")
         os.makedirs(render_dir, exist_ok=True)
-        
-        cached_path = os.path.join(render_dir, f"{photo_id}.jpg")
+
+        # Embed the source file's mtime in the cache key: replaced content
+        # gets a new mtime, hence a new key, so the cache invalidates itself
+        # without extra bookkeeping. Rows from before this column existed
+        # (NULL) keep the legacy key until their next rescan.
+        mtime_ns = photo["file_mtime_ns"]
+        cached_path = os.path.join(
+            render_dir,
+            f"{photo_id}_{mtime_ns}.jpg" if mtime_ns else f"{photo_id}.jpg",
+        )
         
         if os.path.exists(cached_path):
             return FileResponse(
@@ -640,6 +693,7 @@ async def api_get_photo_render(photo_id: int):
             # rendering while we waited.
             if not os.path.exists(cached_path):
                 await asyncio.to_thread(convert_to_jpeg)
+                await asyncio.to_thread(_cleanup_old_renders, render_dir, photo_id, cached_path)
         
         return FileResponse(
             cached_path,
