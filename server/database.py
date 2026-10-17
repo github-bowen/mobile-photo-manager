@@ -84,6 +84,10 @@ async def init_db():
     """Initialize the database and create tables if needed."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
+        # WAL persists in the database file itself, so setting it once here
+        # is enough. It lets readers proceed while a scan commits batches,
+        # and -wal/-shm sidecar files are normal (see .gitignore).
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.executescript(SCHEMA)
         columns = {
             row[1] for row in await db.execute_fetchall("PRAGMA table_info(photos)")
@@ -98,6 +102,11 @@ async def get_db() -> aiosqlite.Connection:
     """Get a database connection."""
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
+    # Per-connection pragmas. A fresh connection per request is cheap on
+    # the same machine (microseconds), so keep that model — but make it
+    # wait briefly instead of erroring if a scan batch holds the lock.
+    await db.execute("PRAGMA busy_timeout=5000")
+    await db.execute("PRAGMA synchronous=NORMAL")
     return db
 
 
