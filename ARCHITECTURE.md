@@ -75,10 +75,13 @@ Mirrors the original photo directory structure inside the cache. Utilizes Pillow
 #### 3.3 `geocoder.py` — Offline Geocoding
 Uses a KD-Tree based offline reverse geocoder. Coordinates are rounded to 2 decimal places (approx. 1.1km precision) for clustering and deduplication. Coordinates inside China fall back to BigDataCloud for Chinese names. The offline engine returns localized proper names for some places (e.g. the German "Zuerich"); `EXONYM_MAP` normalizes them to English exonyms at assembly time, so the database, search, translation cache, and UI all agree on one spelling.
 
-#### 3.4 `database.py` — SQLite Layer
+#### 3.4 `app.py` — Translation Pipeline
+Place names are translated on demand into the UI language and cached persistently (`data/translation_cache.json`), so each distinct string costs at most one external call ever. The upstream is paced (`TRANSLATE_MIN_INTERVAL`) to stay under the free Google endpoint's ~5 req/s quota, retries briefly on 429 answers, and falls back to a second engine (MyMemory) when one is unreachable — e.g. Google from mainland China — degrading it for a cooldown window instead of burning the full timeout per string. Names that already carry Chinese characters (the geocoder stores localized zh names for China) skip the network entirely.
+
+#### 3.5 `database.py` — SQLite Layer
 A single `photos` table covers file info, GPS, EXIF parameters, Takeout provenance, and metadata tags. Async access uses `aiosqlite`, with additive startup migrations for existing databases. The database runs in WAL mode with `busy_timeout`/`synchronous=NORMAL` per connection. Two migration mechanisms exist: `MIGRATIONS` adds columns/indexes idempotently, and `DATA_MIGRATIONS` performs one-time content rewrites gated by `PRAGMA user_version` (e.g. rewriting stored city-name spellings after the geocoder learned exonyms). Listing queries prune heavy columns (the Takeout sidecar JSON is only fetched for detail views).
 
-#### 3.5 Frontend Architecture (`frontend/js/`)
+#### 3.6 Frontend Architecture (`frontend/js/`)
 A modular single-page application built with Vanilla ES Modules.
 - **Modular Design**: Split into `main.js` (entry), `boot.js` (pre-paint theme, FOUC guard), `api.js` (network), `state.js` (state), `constants.js` (shared constants), `favorites.js` (favorite toggling + `favorite-changed` event), `gallery.js` (photo grid), `modal.js` (viewer), `sidebar.js` (timeline/locations), `autoplay.js` (slideshow), `i18n.js` (language), and `utils.js` (formatters).
 - **Card Pooling**: Cards for off-screen photos (beyond a 3000px buffer) are recycled into a pool and replaced by fixed-size placeholders, so the DOM stays viewport-sized in libraries of tens of thousands of photos. A second `IntersectionObserver` unloads card *content* closer to the viewport edge, pausing and removing `<img/>`/`<video>` elements (and their hover timers) to keep memory minimal.

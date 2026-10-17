@@ -187,6 +187,193 @@ class TranslateTextCacheTests(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class TranslateTextRobustnessTests(unittest.TestCase):
+    """Pacing, retry and engine-fallback behavior of translate_text.
+
+    Locks the two failure modes that made translation useless in
+    practice: Google answering 429 ("too many requests") when the old
+    Semaphore(10) burst past its ~5 req/s quota, and the engine being
+    outright unreachable (e.g. Google from mainland China), where every
+    string used to burn the full timeout.
+    """
+
+    def setUp(self):
+        import time
+
+        import server.app as app
+
+        self.app = app
+        self._time = time
+        self._saved = (
+            app._translations,
+            app._engines_for,
+            dict(app._engine_deadline),
+            app.TRANSLATE_RETRY_BACKOFF,
+            app.TRANSLATE_TIMEOUT,
+            app.TRANSLATE_DEGRADE_COOLDOWN,
+            app._translation_pacer.interval,
+        )
+        self._temp = tempfile.TemporaryDirectory()
+        app._translations = TranslationCache(
+            os.path.join(self._temp.name, "translation_cache.json"),
+            debounce_seconds=3600,
+        )
+        app._engine_deadline.clear()
+        # Keep the tests fast: no backoff sleeps, no pacing gaps.
+        app.TRANSLATE_RETRY_BACKOFF = 0
+        app._translation_pacer.interval = 0
+
+    def tearDown(self):
+        app = self.app
+        (
+            app._translations,
+            app._engines_for,
+            deadlines,
+            app.TRANSLATE_RETRY_BACKOFF,
+            app.TRANSLATE_TIMEOUT,
+            app.TRANSLATE_DEGRADE_COOLDOWN,
+            app._translation_pacer.interval,
+        ) = self._saved
+        app._engine_deadline.clear()
+        app._engine_deadline.update(deadlines)
+        self._temp.cleanup()
+
+    def test_localized_cjk_text_skips_the_network(self):
+        app = self.app
+
+        def no_engines(target_lang):
+            raise AssertionError("already-localized text must not reach engines")
+
+        app._engines_for = no_engines
+        # The geocoder stores localized names (localityLanguage=zh); these
+        # used to be "translated" per unique string for nothing.
+        result = asyncio.run(app.translate_text("包头市, 内蒙古自治区, 中国"))
+        self.assertEqual(result, "包头市, 内蒙古自治区, 中国")
+        # Traditional characters land in the same range and skip too.
+        result = asyncio.run(app.translate_text("銀川市, 宁夏回族自治区, 中国"))
+        self.assertEqual(result, "銀川市, 宁夏回族自治区, 中国")
+
+        # Mixed Latin+CJK strings are NOT skipped: they may still carry
+        # translatable Latin parts.
+        app._engines_for = lambda target_lang: (("fake", lambda text: "译:" + text),)
+        result = asyncio.run(app.translate_text("Baotou 包头市"))
+        self.assertEqual(result, "译:Baotou 包头市")
+
+    def test_unreachable_engine_degrades_and_falls_back(self):
+        app = self.app
+        calls = []
+
+        def engines(target_lang):
+            def google(text):
+                calls.append("google")
+                raise ConnectionError("connection refused")
+
+            def mymemory(text):
+                calls.append("mymemory")
+                return "译:" + text
+
+            return (("google", google), ("mymemory", mymemory))
+
+        app._engines_for = engines
+        first = asyncio.run(app.translate_text("Bern, Switzerland"))
+        self.assertEqual(first, "译:Bern, Switzerland")
+        # Google got a degrade window instead of being retried per string.
+        self.assertGreater(app._engine_deadline.get("google", 0), self._time.monotonic())
+
+        second = asyncio.run(app.translate_text("Basel, Switzerland"))
+        self.assertEqual(second, "译:Basel, Switzerland")
+        self.assertEqual(calls, ["google", "mymemory", "mymemory"])
+
+    def test_rate_limited_engine_retries_then_falls_back(self):
+        from deep_translator.exceptions import TooManyRequests
+
+        app = self.app
+        attempts = []
+
+        def engines(target_lang):
+            def google(text):
+                attempts.append("google")
+                raise TooManyRequests()
+
+            def mymemory(text):
+                attempts.append("mymemory")
+                return "译:" + text
+
+            return (("google", google), ("mymemory", mymemory))
+
+        app._engines_for = engines
+        result = asyncio.run(app.translate_text("Bern, Switzerland"))
+        self.assertEqual(result, "译:Bern, Switzerland")
+        # Two backoff retries on the quota answer, then the next engine.
+        self.assertEqual(attempts, ["google", "google", "google", "mymemory"])
+        # 429 is a quota signal, not an outage: no degrade window.
+        self.assertEqual(app._engine_deadline, {})
+
+    def test_all_engines_degraded_serves_original_immediately(self):
+        app = self.app
+        probes = []
+
+        def engines(target_lang):
+            def dead(text):
+                probes.append(text)
+                raise ConnectionError("no route to host")
+
+            return (("google", dead), ("mymemory", dead))
+
+        app._engines_for = engines
+        first = asyncio.run(app.translate_text("Bern, Switzerland"))
+        self.assertEqual(first, "Bern, Switzerland")
+        # The failed answer must not be cached as a "translation".
+        self.assertIsNone(app._translations.get("Bern, Switzerland", "zh-CN"))
+
+        # Both engines degraded now: further strings must return instantly
+        # without probing anything (no timeout pile-up per string).
+        second = asyncio.run(app.translate_text("Basel, Switzerland"))
+        self.assertEqual(second, "Basel, Switzerland")
+        # One probe per engine on the first string, none on the second.
+        self.assertEqual(probes, ["Bern, Switzerland", "Bern, Switzerland"])
+
+    def test_engine_timeout_degrades_the_engine(self):
+        app = self.app
+        app.TRANSLATE_TIMEOUT = 0.05
+
+        def engines(target_lang):
+            def slow(text):
+                self._time.sleep(0.3)
+                return "never returned"
+
+            def fast(text):
+                return "译:" + text
+
+            return (("google", slow), ("mymemory", fast))
+
+        app._engines_for = engines
+        result = asyncio.run(app.translate_text("Bern, Switzerland"))
+        self.assertEqual(result, "译:Bern, Switzerland")
+        self.assertGreater(app._engine_deadline.get("google", 0), self._time.monotonic())
+
+    def test_mymemory_quota_answer_is_not_a_translation(self):
+        app = self.app
+
+        class FakeMyMemory:
+            def __init__(self, source="auto", target="zh-CN"):
+                pass
+
+            def translate(self, text):
+                return (
+                    "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE "
+                    "TRANSLATIONS FOR TODAY"
+                )
+
+        original = app.MyMemoryTranslator
+        app.MyMemoryTranslator = FakeMyMemory
+        try:
+            with self.assertRaises(app._EngineError):
+                app._mymemory_translate("zh-CN", "Bern, Switzerland")
+        finally:
+            app.MyMemoryTranslator = original
+
+
 class LocationsEndpointTests(unittest.TestCase):
     """Lock the /api/locations behavior: translation via cache, cap fallback."""
 

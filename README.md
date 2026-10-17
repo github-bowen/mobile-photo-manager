@@ -101,6 +101,10 @@ Key configuration options (`.env`):
 | `HTTP_CACHE_MAX_AGE` | `86400` | Browser cache lifetime (seconds) for photos, thumbnails, and renders |
 | `TRANSLATION_FLUSH_DEBOUNCE` | `5` | Seconds to debounce translation-cache writes |
 | `TRANSLATE_MAX_ITEMS` | `300` | Above this many distinct place names, `/api/locations` skips translation and serves raw names |
+| `TRANSLATE_MIN_INTERVAL` | `0.25` | Minimum seconds between external translation requests (Google's free endpoint allows ~5/s) |
+| `TRANSLATE_TIMEOUT` | `10` | Seconds to wait for one translation request before giving up |
+| `TRANSLATE_DEGRADE_COOLDOWN` | `600` | Seconds an unreachable translation engine (e.g. Google from mainland China) is skipped before retrying; a fallback engine (MyMemory) takes over meanwhile |
+| `TRANSLATE_RETRY_BACKOFF` | `1.5` | Backoff base (seconds) between rate-limit retries of a translation engine |
 
 #### 3. Import Photos
 

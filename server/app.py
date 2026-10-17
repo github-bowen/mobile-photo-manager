@@ -5,12 +5,14 @@ and thumbnail serving.
 """
 
 import asyncio
+import concurrent.futures
 import glob
 import hashlib
 import os
 import logging
 import json
 import re
+import time
 import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -22,7 +24,8 @@ from fastapi import FastAPI, Query, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
+from deep_translator.exceptions import TooManyRequests
 
 from pydantic import BaseModel
 
@@ -59,6 +62,18 @@ TRANSLATION_FLUSH_DEBOUNCE = float(os.getenv("TRANSLATION_FLUSH_DEBOUNCE", "5"))
 # Above this many distinct strings, /api/locations serves raw names instead
 # of firing one external translation call per place.
 TRANSLATE_MAX_ITEMS = int(os.getenv("TRANSLATE_MAX_ITEMS", "300"))
+# Upstream pacing: the free Google endpoint answers 429 ("too many
+# requests") above ~5 req/s, so request starts are spaced at least this
+# many seconds apart. 0.25s keeps steady traffic at 4 req/s.
+TRANSLATE_MIN_INTERVAL = float(os.getenv("TRANSLATE_MIN_INTERVAL", "0.25"))
+# Per-attempt wall-clock cap for one upstream call. deep_translator's
+# requests calls carry no timeout of their own; this wait_for is the bound.
+TRANSLATE_TIMEOUT = float(os.getenv("TRANSLATE_TIMEOUT", "10"))
+# How long an unreachable engine (timed out / connection refused — e.g.
+# Google from mainland China) is skipped before a probe retries it.
+TRANSLATE_DEGRADE_COOLDOWN = float(os.getenv("TRANSLATE_DEGRADE_COOLDOWN", "600"))
+# Backoff between rate-limit retries of the same engine, scaled by attempt.
+TRANSLATE_RETRY_BACKOFF = float(os.getenv("TRANSLATE_RETRY_BACKOFF", "1.5"))
 
 
 class TranslationCache:
@@ -172,31 +187,190 @@ class TranslationCache:
 
 
 _translations = TranslationCache(TRANSLATION_CACHE_FILE)
-_translation_sem = asyncio.Semaphore(10)
 
-async def translate_text(text: str, target_lang: str = 'zh-CN') -> str:
+# --- Upstream pacing and engine fallback ---------------------------------
+#
+# Two failure modes were fatal in practice:
+#   * "too many requests" — Google's free endpoint 429s above ~5 req/s,
+#     and the old Semaphore(10) let a whole /api/locations request burst
+#     a dozen concurrent calls straight past that quota;
+#   * unreachable upstream — on networks where Google is blocked (e.g.
+#     mainland China) every string burned the full timeout, one after
+#     another, on every request.
+#
+# The pipeline below fixes both: request starts are paced under the
+# quota, rate-limit answers get short backoff retries, network failures
+# degrade the engine for a cooldown window and fall back to the next
+# engine (MyMemory needs no API key), and while every engine is degraded
+# translate_text serves the original text immediately instead of piling
+# up timeouts. Strings that already carry Chinese characters never hit
+# the network at all: the geocoder asks BigDataCloud for localized (zh)
+# names, so a large share of "translations" used to be no-op calls that
+# only burned quota.
+
+_CJK_RE = re.compile("[\u3400-\u4dbf\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+# Requests that miss the cache run here, bounded so hung engine calls
+# (no network egress, no engine timeout) cannot occupy unbounded threads.
+_translation_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="translation"
+)
+
+
+class _Unreachable(Exception):
+    """Engine could not be reached — degrade it for the cooldown."""
+
+
+class _EngineError(Exception):
+    """Engine was reached but produced nothing usable — try the next one."""
+
+
+def _mymemory_translate(target_lang: str, text: str) -> str:
+    # MyMemory reports its daily-quota and validation problems inside the
+    # translation field of a 200 response instead of raising; filter those
+    # out so they are never cached as real translations.
+    out = MyMemoryTranslator(source="auto", target=target_lang).translate(text) or ""
+    upper = out.upper()
+    for marker in ("MYMEMORY WARNING", "INVALID", "QUERY LENGTH LIMIT"):
+        if marker in upper:
+            raise _EngineError(f"mymemory rejected the request: {out[:120]}")
+    return out
+
+
+def _engines_for(target_lang: str):
+    """Ordered engine chain. Substituted in tests."""
+    return (
+        (
+            "google",
+            lambda text: GoogleTranslator(
+                source="auto", target=target_lang
+            ).translate(text),
+        ),
+        ("mymemory", lambda text: _mymemory_translate(target_lang, text)),
+    )
+
+
+_engine_deadline: dict = {}
+
+
+def _live_engines(target_lang: str):
+    now = time.monotonic()
+    return [
+        (name, call)
+        for name, call in _engines_for(target_lang)
+        if _engine_deadline.get(name, 0.0) <= now
+    ]
+
+
+class _UpstreamPacer:
+    """Spaces upstream request starts by at least the configured interval.
+
+    The lock is held only while reserving a start slot, so requests may
+    overlap in flight but never start closer together than the quota
+    allows (holding it for the whole call would cap throughput at one
+    request per latency, far below what the quota permits).
+    """
+
+    def __init__(self, interval: float):
+        self.interval = interval
+        self._lock = None
+        self._lock_loop = None
+        self._next_at = 0.0
+
+    async def reserve(self):
+        loop = asyncio.get_running_loop()
+        if self._lock_loop is not loop:
+            # asyncio.Lock binds to the first loop it ran in; re-create it
+            # when a different loop shows up (tests run many fresh loops).
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        async with self._lock:
+            wait = self._next_at - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_at = time.monotonic() + self.interval
+
+
+_translation_pacer = _UpstreamPacer(TRANSLATE_MIN_INTERVAL)
+
+
+async def _call_engine(name: str, call, text: str) -> str:
+    """One paced engine attempt, with backoff retries on rate limits.
+
+    Raises _Unreachable (degrade this engine) or _EngineError (move on to
+    the next one) so translate_text can react to the failure mode instead
+    of treating every failure the same.
+    """
+    rate_limited = None
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(TRANSLATE_RETRY_BACKOFF * attempt)
+        await _translation_pacer.reserve()
+        try:
+            translated = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    _translation_pool, call, text
+                ),
+                timeout=TRANSLATE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise _Unreachable(f"{name}: no answer within {TRANSLATE_TIMEOUT:.0f}s")
+        except TooManyRequests as e:
+            rate_limited = e
+        except Exception as e:
+            # requests' exception tree is OSError-flavoured, so a refused
+            # or reset connection (the blocked-network case) lands here.
+            message = str(e).lower()
+            if "too many requests" in message:
+                rate_limited = e
+            elif isinstance(e, (ConnectionError, TimeoutError, OSError)) or "connection" in message:
+                raise _Unreachable(f"{name}: {e}")
+            else:
+                raise _EngineError(f"{name}: {e}")
+        else:
+            translated = (translated or "").strip()
+            if not translated:
+                raise _EngineError(f"{name}: empty translation")
+            return translated
+    raise _EngineError(f"{name}: rate limited ({rate_limited})")
+
+
+async def translate_text(text: str, target_lang: str = "zh-CN") -> str:
     if not text:
         return text
     cached = _translations.get(text, target_lang)
     if cached is not None:
         return cached
-    try:
-        async with _translation_sem:
-            # Run GoogleTranslator in a thread pool since it's blocking
-            translated = await asyncio.wait_for(
-                asyncio.to_thread(
-                    lambda: GoogleTranslator(source='auto', target=target_lang).translate(text)
-                ),
-                timeout=10.0
+    # Already-localized strings (CJK present, no Latin letters) need no
+    # zh translation; asking an engine would burn quota to return the
+    # input unchanged.
+    if (
+        target_lang.lower().startswith("zh")
+        and _CJK_RE.search(text)
+        and not _LATIN_RE.search(text)
+    ):
+        return text
+    for name, call in _live_engines(target_lang):
+        try:
+            translated = await _call_engine(name, call, text)
+        except _Unreachable as e:
+            _engine_deadline[name] = time.monotonic() + TRANSLATE_DEGRADE_COOLDOWN
+            logger.warning(
+                "Translation engine '%s' unreachable - falling back for %.0fs: %s",
+                name,
+                TRANSLATE_DEGRADE_COOLDOWN,
+                e,
             )
-        _translations.put(text, target_lang, translated)
-        return translated
-    except asyncio.TimeoutError:
-        logger.warning(f"Translation timeout for '{text}'")
-        return text
-    except Exception as e:
-        logger.warning(f"Translation failed for '{text}': {e}")
-        return text
+        except _EngineError as e:
+            logger.warning(
+                "Translation engine '%s' failed for '%s': %s", name, text, e
+            )
+        else:
+            _translations.put(text, target_lang, translated)
+            return translated
+    logger.debug("No translation engine available for '%s'; serving it untranslated", text)
+    return text
 
 _photos_env = os.getenv("PHOTOS_DIR", "photos")
 if os.path.isabs(_photos_env):
@@ -376,6 +550,8 @@ async def lifespan(app: FastAPI):
 
     # Persist any translations still sitting in the debounced write queue.
     await _translations.flush()
+    # A hung engine call (no network egress) must not hold up shutdown.
+    _translation_pool.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="Mobile Photo Manager", lifespan=lifespan)
