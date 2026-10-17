@@ -199,6 +199,12 @@ class ThumbnailGenerationTests(unittest.TestCase):
                 thumbnail.THUMBNAIL_DIR = original_thumbs
 
 
+class _NoRevalidateRequest:
+    """Request stub without an If-None-Match header: conditional 304s skip."""
+
+    headers = {}
+
+
 class RenderCacheKeyTests(unittest.TestCase):
     def test_render_key_rotates_and_old_renders_are_cleaned(self):
         async def run_test():
@@ -233,7 +239,9 @@ class RenderCacheKeyTests(unittest.TestCase):
                         photo_id = await database.insert_photo(db, base)
 
                         # First render caches under the mtime-embedded key.
-                        response = await api_get_photo_render(photo_id)
+                        response = await api_get_photo_render(
+                            photo_id, _NoRevalidateRequest()
+                        )
                         expected_key = f"{photo_id}_{mtime}.jpg"
                         self.assertTrue(response.path.endswith(expected_key))
                         self.assertTrue(os.path.exists(response.path))
@@ -245,7 +253,9 @@ class RenderCacheKeyTests(unittest.TestCase):
                             db, {**base, "file_mtime_ns": mtime + 10**9}
                         )
 
-                        response2 = await api_get_photo_render(photo_id)
+                        response2 = await api_get_photo_render(
+                            photo_id, _NoRevalidateRequest()
+                        )
                         expected_key2 = f"{photo_id}_{mtime + 10**9}.jpg"
                         self.assertTrue(response2.path.endswith(expected_key2))
 

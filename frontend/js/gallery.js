@@ -61,7 +61,10 @@ function renderCardContent(card, photo) {
   const img = document.createElement("img");
   img.className = "loading";
   img.alt = photo.filename || t("photo_alt");
-  img.src = "/api/photos/" + photo.id + "/thumbnail/small?v=" + Date.now();
+  // No cache-busting query: the thumbnail URL is stable, so the browser
+  // cache and the server's ETag/304 revalidation do the invalidation work
+  // (a replaced file gets a fresh thumbnail with a new ETag on rescan).
+  img.src = "/api/photos/" + photo.id + "/thumbnail/small";
   img.onload = () => img.className = "loaded";
   img.onerror = () => {
     img.className = "loaded";

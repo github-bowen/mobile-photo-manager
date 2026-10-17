@@ -16,7 +16,7 @@ from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, Query, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -207,6 +207,37 @@ SERVER_HOST = os.getenv("SERVER_HOST", "127.0.0.1")
 HTTP_CACHE_MAX_AGE = int(os.getenv("HTTP_CACHE_MAX_AGE", 86400))
 SCAN_ON_STARTUP = os.getenv("SCAN_ON_STARTUP", "True").lower() in ("true", "1", "yes")
 LOAD_ORIGINAL_ON_CLICK = os.getenv("LOAD_ORIGINAL_ON_CLICK", "False").lower() in ("true", "1", "yes")
+
+
+def _file_etag(path: str) -> str:
+    """Strong ETag from mtime + size: a regenerated thumbnail or a replaced
+    source file gets a new mtime, hence a new tag, for free."""
+    stat = os.stat(path)
+    return f'"{int(stat.st_mtime)}-{stat.st_size}"'
+
+
+def _conditional_304(request: Request, etag: str) -> Optional[Response]:
+    """Return a 304 when the request's If-None-Match covers the current tag.
+
+    starlette's FileResponse does not evaluate conditional headers, so
+    revalidation is done by hand. A 304 must echo the ETag and the cache
+    policy so the browser's next revalidate has everything it needs.
+    """
+    header = request.headers.get("if-none-match")
+    if not header:
+        return None
+    for tag in header.split(","):
+        tag = tag.strip()
+        if tag in (etag, "W/" + etag, "*"):
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}",
+                },
+            )
+    return None
+
 
 # Scan state
 scan_state = {
@@ -647,7 +678,7 @@ async def api_toggle_photo_favorite(photo_id: int, payload: Optional[FavoriteUpd
 
 
 @app.get("/api/photos/{photo_id}/file")
-async def api_get_photo_file(photo_id: int):
+async def api_get_photo_file(photo_id: int, request: Request):
     """Serve the original photo file."""
     db = await get_db()
     try:
@@ -664,6 +695,11 @@ async def api_get_photo_file(photo_id: int):
 
         if not os.path.exists(full_path):
             raise HTTPException(status_code=404, detail="File not found")
+
+        etag = _file_etag(full_path)
+        not_modified = _conditional_304(request, etag)
+        if not_modified:
+            return not_modified
 
         # Determine media type
         ext = os.path.splitext(filepath)[1].lower()
@@ -686,6 +722,7 @@ async def api_get_photo_file(photo_id: int):
             media_type=media_type,
             headers={
                 "Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}",
+                "ETag": etag,
                 "Content-Disposition": f'inline; filename="{photo["filename"]}"'
             }
         )
@@ -714,7 +751,7 @@ def _cleanup_old_renders(render_dir: str, photo_id: int, current_path: str) -> N
 
 
 @app.get("/api/photos/{photo_id}/render")
-async def api_get_photo_render(photo_id: int):
+async def api_get_photo_render(photo_id: int, request: Request):
     """Render the full-quality original photo in a browser-supported format (JPEG)."""
     db = await get_db()
     try:
@@ -737,10 +774,17 @@ async def api_get_photo_render(photo_id: int):
                 ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
                 ".webp": "image/webp", ".avif": "image/avif",
             }
+            etag = _file_etag(full_path)
+            not_modified = _conditional_304(request, etag)
+            if not_modified:
+                return not_modified
             return FileResponse(
                 full_path,
                 media_type=image_types[ext],
-                headers={"Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}"}
+                headers={
+                    "Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}",
+                    "ETag": etag,
+                }
             )
 
         # For HEIC, cache the rendered JPEG on disk to speed up subsequent loads
@@ -759,10 +803,17 @@ async def api_get_photo_render(photo_id: int):
         )
         
         if os.path.exists(cached_path):
+            etag = _file_etag(cached_path)
+            not_modified = _conditional_304(request, etag)
+            if not_modified:
+                return not_modified
             return FileResponse(
                 cached_path,
                 media_type="image/jpeg",
-                headers={"Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}"}
+                headers={
+                    "Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}",
+                    "ETag": etag,
+                }
             )
 
         from PIL import Image, ImageOps
@@ -802,7 +853,10 @@ async def api_get_photo_render(photo_id: int):
         return FileResponse(
             cached_path,
             media_type="image/jpeg",
-            headers={"Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}"}
+            headers={
+                "Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}",
+                "ETag": _file_etag(cached_path),
+            }
         )
 
     finally:
@@ -915,7 +969,7 @@ async def api_get_motion_video(photo_id: int, request: Request):
 # batch generator so total decode concurrency stays within THUMBNAIL_WORKERS.
 
 @app.get("/api/photos/{photo_id}/thumbnail/{size}")
-async def api_get_thumbnail(photo_id: int, size: str):
+async def api_get_thumbnail(photo_id: int, size: str, request: Request):
     """Serve a thumbnail image."""
     if size not in ("small", "medium"):
         raise HTTPException(status_code=400, detail="Invalid size. Use 'small' or 'medium'.")
@@ -963,8 +1017,11 @@ async def api_get_thumbnail(photo_id: int, size: str):
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
     # ETag based on file modification time for cache busting
-    stat = os.stat(thumb_path)
-    etag = f'"{int(stat.st_mtime)}-{stat.st_size}"'
+    etag = _file_etag(thumb_path)
+
+    not_modified = _conditional_304(request, etag)
+    if not_modified:
+        return not_modified
 
     return FileResponse(
         thumb_path,
