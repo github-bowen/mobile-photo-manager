@@ -11,6 +11,10 @@ const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
 // browser autoplay policy) instead of poking the badge DOM.
 let currentPlayLive = null;
 
+// Element focused when the modal opened; closeModal returns focus there so
+// keyboard users land back where they were instead of at the top of the page.
+let modalOpener = null;
+
 export function playCurrentLive(muted) {
   if (typeof currentPlayLive === "function") {
     currentPlayLive({ muted: !!muted });
@@ -19,13 +23,19 @@ export function playCurrentLive(muted) {
 
 export function openModal(index) {
   if (!state.photos || state.photos.length === 0) return;
+  modalOpener = document.activeElement;
   state.modalPhotoIndex = index;
   renderModalContent();
-  
+
   const modalBackdrop = $("modal-backdrop");
   modalBackdrop.classList.add("active");
-  
+
   document.body.style.overflow = "hidden";
+
+  // Dialogs take focus on open; the close button is a safe first stop that
+  // is always present, whatever renderModalContent rebuilt this time.
+  const closeBtn = $("modal-close");
+  if (closeBtn) closeBtn.focus();
 }
 
 export function closeModal() {
@@ -51,6 +61,13 @@ export function closeModal() {
   }
 
   modalInfo.replaceChildren();
+
+  // Return focus to whatever opened the modal (if it is still in the DOM —
+  // pooled/recycled cards may have been swapped out while it was open).
+  if (modalOpener && document.contains(modalOpener)) {
+    modalOpener.focus();
+  }
+  modalOpener = null;
 }
 
 export async function nextModalPhoto() {
@@ -477,6 +494,32 @@ export function setupModalEvents() {
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
       nextModalPhoto();
+    } else if (e.key === "Tab" && modalBackdrop) {
+      // Focus trap: aria-modal="true" promises assistive tech that Tab
+      // stays inside the dialog, so wrap it at the edges instead of
+      // letting it wander into the page behind the backdrop.
+      const focusables = Array.from(modalBackdrop.querySelectorAll(
+        'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (el) {
+        // Hidden controls (e.g. the slideshow toolbar while inactive)
+        // must not be tab stops. offsetParent is null for display:none.
+        return el.offsetParent !== null;
+      });
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !modalBackdrop.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (active === last || !modalBackdrop.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     }
   });
 

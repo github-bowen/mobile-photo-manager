@@ -114,3 +114,13 @@ export function createEmptyState(icon, text, subtext) {
 
   return el;
 }
+
+// The header toggle pills are div-based switches (role="switch"). This is
+// the single place that keeps their visual .active class and their
+// aria-checked attribute in agreement, so keyboard and screen-reader users
+// see the same state as everyone else.
+export function setSwitchState(el, on) {
+  if (!el) return;
+  el.classList.toggle("active", !!on);
+  el.setAttribute("aria-checked", String(!!on));
+}

@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { api } from './api.js';
 import { applyTranslations } from './i18n.js';
-import { updateStats } from './utils.js';
+import { updateStats, setSwitchState } from './utils.js';
 import { loadPhotos, resetAndReload, setupInfiniteScroll, requestNextPage } from './gallery.js';
 import { loadTimeline, loadLocations, closeMobileSidebar, resetSidebarTimer } from './sidebar.js';
 import { closeModal, renderModalContent, setupModalEvents } from './modal.js';
@@ -161,6 +161,18 @@ function setupFilters() {
   }
 }
 
+// role="switch" widgets activate on Enter/Space like native checkboxes do;
+// the pills have no native key behavior of their own, so route keys to click.
+function armPillKeyboard(btn) {
+  if (!btn) return;
+  btn.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+}
+
 // Theme is stored on BOTH the body class (legacy + component selectors)
 // and html[data-theme] (set pre-paint by boot.js). classList, not className
 // — a bare className assignment would clobber any other body class.
@@ -184,36 +196,23 @@ async function init() {
     } else if (config.language) {
         state.language = config.language;
     }
-    if (langToggle) {
-        if (state.language === "en") langToggle.classList.add("active");
-        else langToggle.classList.remove("active");
-    }
+    setSwitchState(langToggle, state.language === "en");
 
     if (localStorage.getItem("app_theme")) {
         state.theme = localStorage.getItem("app_theme");
     } else if (config.theme) {
         state.theme = config.theme;
     }
-    
-    if (themeToggle) {
-        if (state.theme === "dark") themeToggle.classList.add("active");
-        else themeToggle.classList.remove("active");
-    }
+    setSwitchState(themeToggle, state.theme === "dark");
 
     if (localStorage.getItem("app_sort")) {
         state.sortOrder = localStorage.getItem("app_sort");
     }
-    if (sortToggle) {
-        if (state.sortOrder === "asc") sortToggle.classList.add("active");
-        else sortToggle.classList.remove("active");
-    }
+    setSwitchState(sortToggle, state.sortOrder === "asc");
 
     if (config.load_original_on_click !== undefined) {
         state.loadOriginalOnClick = config.load_original_on_click;
-        if (loadOriginalToggle) {
-            if (state.loadOriginalOnClick) loadOriginalToggle.classList.add("active");
-            else loadOriginalToggle.classList.remove("active");
-        }
+        setSwitchState(loadOriginalToggle, state.loadOriginalOnClick);
     }
   } catch (e) {
     console.warn("Failed to load config, using defaults");
@@ -226,17 +225,24 @@ async function init() {
   setupModalEvents();
   setupInfiniteScroll();
 
+  armPillKeyboard(loadOriginalToggle);
+  armPillKeyboard(langToggle);
+  armPillKeyboard(themeToggle);
+  armPillKeyboard(sortToggle);
+
   if (loadOriginalToggle) {
     loadOriginalToggle.addEventListener("click", function (e) {
-      this.classList.toggle("active");
-      state.loadOriginalOnClick = this.classList.contains("active");
+      const on = !this.classList.contains("active");
+      setSwitchState(this, on);
+      state.loadOriginalOnClick = on;
     });
   }
 
   if (langToggle) {
     langToggle.addEventListener("click", function (e) {
-      this.classList.toggle("active");
-      state.language = this.classList.contains("active") ? "en" : "zh";
+      const on = !this.classList.contains("active");
+      setSwitchState(this, on);
+      state.language = on ? "en" : "zh";
       localStorage.setItem("app_language", state.language);
       applyTranslations();
       loadTimeline();
@@ -247,8 +253,9 @@ async function init() {
 
   if (themeToggle) {
     themeToggle.addEventListener("click", function (e) {
-      this.classList.toggle("active");
-      state.theme = this.classList.contains("active") ? "dark" : "light";
+      const on = !this.classList.contains("active");
+      setSwitchState(this, on);
+      state.theme = on ? "dark" : "light";
       localStorage.setItem("app_theme", state.theme);
       applyTheme();
     });
@@ -256,8 +263,9 @@ async function init() {
 
   if (sortToggle) {
     sortToggle.addEventListener("click", function (e) {
-      this.classList.toggle("active");
-      state.sortOrder = this.classList.contains("active") ? "asc" : "desc";
+      const on = !this.classList.contains("active");
+      setSwitchState(this, on);
+      state.sortOrder = on ? "asc" : "desc";
       localStorage.setItem("app_sort", state.sortOrder);
       loadTimeline();
       resetAndReload();

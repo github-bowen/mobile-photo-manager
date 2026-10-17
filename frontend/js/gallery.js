@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { $, formatDateLabel, formatDuration, createEmptyState } from './utils.js';
+import { $, formatDateLabel, formatDuration, createEmptyState, setSwitchState } from './utils.js';
 import { openModal } from './modal.js';
 import { toggleFavorite } from './favorites.js';
 
@@ -120,6 +120,7 @@ function restoreCard(placeholder) {
 
   const card = cardPool.pop() || buildNewCard();
   card.setAttribute("data-id", photo.id);
+  card.setAttribute("aria-label", photo.filename || t("photo_alt"));
 
   // Restored cards appear instantly. A temporary class removed on the next
   // frame wouldn't work — CSS would treat the none->fadeIn change as a new
@@ -211,6 +212,17 @@ function buildNewCard() {
   // therefore checked inside the timer, not at bind time.
   const card = document.createElement("div");
   card.className = "photo-card";
+  // Cards are divs: give them the button contract so keyboard users can
+  // tab to a photo and open it with Enter/Space, announced as a button.
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+
+  card.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      card.click();
+    }
+  });
 
   card.addEventListener("click", function () {
     const idx = photoIndexById.get(Number(card.dataset.id));
@@ -262,6 +274,7 @@ function buildNewCard() {
 function createPhotoCard(photo) {
   const card = cardPool.pop() || buildNewCard();
   card.setAttribute("data-id", photo.id);
+  card.setAttribute("aria-label", photo.filename || t("photo_alt"));
 
   if (galleryObserver) {
     galleryObserver.observe(card);
@@ -524,7 +537,7 @@ export function syncFilterUI() {
   if (searchInput) searchInput.value = state.searchQuery || "";
 
   const sortToggle = $("sort-toggle");
-  if (sortToggle) sortToggle.classList.toggle("active", state.sortOrder === "asc");
+  if (sortToggle) setSwitchState(sortToggle, state.sortOrder === "asc");
 }
 
 // One toggle -> one "favorite-changed" event -> every view updates itself.

@@ -71,6 +71,7 @@ export const i18n = {
     slideshow_config: "Slideshow Configuration",
     view_original: "View Original File",
     download_btn: "Download",
+    photo_dialog: "Photo Viewer",
     autoplay_title: "▶ Slideshow",
     autoplay_duration_lbl: "Duration:",
     autoplay_wait_video: "Wait for video",
@@ -168,6 +169,7 @@ export const i18n = {
     slideshow_config: "幻灯片播放设置",
     view_original: "查看原始文件",
     download_btn: "下载",
+    photo_dialog: "照片查看",
     autoplay_title: "▶ 自动播放 / Slideshow",
     autoplay_duration_lbl: "停留时长:",
     autoplay_wait_video: "播完视频再切换",
@@ -210,5 +212,8 @@ export function applyTranslations() {
   });
   document.querySelectorAll("[data-i18n-title]").forEach(el => {
     el.title = t(el.getAttribute("data-i18n-title"));
+  });
+  document.querySelectorAll("[data-i18n-aria]").forEach(el => {
+    el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria")));
   });
 }

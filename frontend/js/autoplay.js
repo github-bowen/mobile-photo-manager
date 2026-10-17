@@ -32,6 +32,16 @@ export function initAutoplay() {
       modal.classList.remove('active');
     });
   }
+
+  // Esc closes the config dialog, and opening it moves focus in — a
+  // keyboard user otherwise lands in a dialog their Tab key can't see.
+  // (The photo modal's Escape handler stays inert while the config modal
+  // is up because the photo modal itself is closed at that point.)
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+      modal.classList.remove('active');
+    }
+  });
   
   if (startBtn) {
     startBtn.addEventListener('click', startAutoplay);
@@ -130,6 +140,10 @@ function openAutoplayConfig() {
   }
 
   modal.classList.add('active');
+
+  // Give keyboard users a starting point inside the dialog.
+  const cancelBtn = $('autoplay-cancel-btn');
+  if (cancelBtn) cancelBtn.focus();
 
 }
 

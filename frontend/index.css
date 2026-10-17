@@ -191,6 +191,25 @@ body {
   box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.2), inset 0 1px 1px rgba(255,255,255,0.1);
 }
 
+/* Keyboard focus rings. :focus-visible only draws for keyboard navigation,
+   so mouse clicks stay clean. Covers the div-based widgets (pills, cards,
+   sidebar items) that have no native outline, plus the standard buttons. */
+.toggle-pill:focus-visible,
+.photo-card:focus-visible,
+.sidebar-item:focus-visible,
+.filter-btn:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[data-tabindex]:focus-visible {
+  outline: 2px solid var(--accent-purple);
+  outline-offset: 2px;
+}
+.toggle-pill:focus,
+.photo-card:focus {
+  outline: none;
+}
+
 .toggle-pill.active .toggle-pill-bg {
   transform: translateX(100%);
 }
