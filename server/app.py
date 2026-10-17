@@ -6,6 +6,7 @@ and thumbnail serving.
 
 import asyncio
 import glob
+import hashlib
 import os
 import logging
 import json
@@ -17,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Query, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from deep_translator import GoogleTranslator
@@ -288,7 +289,31 @@ def _start_scan() -> bool:
 # --- Security Middleware ---
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to all responses."""
+    """Add security headers to all responses, plus a cache policy for static assets.
+
+    Cache rules (API routes set their own headers and are left untouched):
+    - content-hashed assets (?v=<10 hex chars>): immutable, cache for a year
+    - boot.js: always revalidate — it must run fresh before first paint
+    - everything else static (index.html, unhashed css/js): revalidate hourly
+    """
+
+    @staticmethod
+    def _is_content_hash(version: Optional[str]) -> bool:
+        return (
+            version is not None
+            and len(version) == 10
+            and all(c in "0123456789abcdef" for c in version)
+        )
+
+    @staticmethod
+    def _cache_policy(path: str, version: Optional[str]) -> Optional[str]:
+        if SecurityHeadersMiddleware._is_content_hash(version):
+            return "public, max-age=31536000, immutable"
+        if path == "/js/boot.js":
+            return "no-cache"
+        if path in ("/", "/index.html") or path.startswith("/js/") or path == "/index.css":
+            return "public, max-age=3600"
+        return None
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
@@ -306,6 +331,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "font-src 'self' https://fonts.gstatic.com; "
             "frame-ancestors 'none'"
         )
+        if not request.url.path.startswith("/api/"):
+            policy = self._cache_policy(
+                request.url.path, request.query_params.get("v")
+            )
+            if policy:
+                response.headers["Cache-Control"] = policy
         return response
 
 
@@ -1127,6 +1158,40 @@ async def api_start_scan():
 
 
 # --- Static Files ---
+
+# index.html pins local assets with a hand-bumped version (?v=17). Instead,
+# at import time every pinned local asset is re-versioned with the first 10
+# hex chars of its content sha1: any edit produces a new URL, so the asset
+# can be cached as immutable (see SecurityHeadersMiddleware) without a
+# manual bump. The result is computed once and served as bytes.
+def _build_hashed_index() -> bytes:
+    with open(os.path.join(FRONTEND_DIR, "index.html"), "r", encoding="utf-8") as f:
+        html = f.read()
+
+    def _reversion(match):
+        url = match.group(1)
+        asset_path = os.path.join(FRONTEND_DIR, url.split("?", 1)[0].lstrip("/"))
+        if not os.path.isfile(asset_path):
+            return match.group(0)
+        with open(asset_path, "rb") as f:
+            digest = hashlib.sha1(f.read()).hexdigest()[:10]
+        return f'{match.group(1).split("?", 1)[0]}?v={digest}"'
+
+    html = re.sub(r'(?:href|src)="(/[^"?]+)\?v=\d+"', _reversion, html)
+    return html.encode("utf-8")
+
+
+_INDEX_HTML = _build_hashed_index()
+
+
+@app.get("/", include_in_schema=False)
+async def serve_index():
+    # Explicit route so the hash-injected HTML (not the on-disk index.html,
+    # which still says ?v=17) is what clients get at the entry point. The
+    # route must be registered before the StaticFiles mount below to win.
+    return HTMLResponse(content=_INDEX_HTML)
+
+
 # Serve frontend files
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
