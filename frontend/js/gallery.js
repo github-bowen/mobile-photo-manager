@@ -24,9 +24,24 @@ function rebuildPhotoIndex() {
   });
 }
 
+// --- Card pool: recycle far-off-screen cards ---
+// The near observer (600px margin) loads/unloads card *content*; the far
+// observer (3000px margin) swaps whole cards that are way outside the
+// viewport for a lightweight placeholder and returns them to a pool. The
+// DOM then holds at most viewport + 3000px worth of live cards however
+// deep the library scrolls. Cards are interchangeable: every listener
+// reads the photo identity from the card's data-id at event time, so a
+// pooled card never needs its handlers rebound.
+const CARD_POOL_LIMIT = 2000;
+const cardPool = [];
+let farObserver = null;
+
 function initVirtualization() {
   if (galleryObserver) {
     galleryObserver.disconnect();
+  }
+  if (farObserver) {
+    farObserver.disconnect();
   }
 
   galleryObserver = new IntersectionObserver((entries) => {
@@ -53,6 +68,71 @@ function initVirtualization() {
     rootMargin: '600px 0px', // Buffer zone to prevent flashing
     threshold: 0
   });
+
+  farObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const el = entry.target;
+      if (entry.isIntersecting) {
+        if (el.classList.contains('photo-card-placeholder')) {
+          restoreCard(el);
+        }
+      } else {
+        if (el.classList.contains('photo-card')) {
+          recycleCard(el);
+        }
+      }
+    });
+  }, {
+    root: $('gallery-container'),
+    rootMargin: '3000px 0px', // Beyond this, swap the whole card out
+    threshold: 0
+  });
+}
+
+function recycleCard(card) {
+  const placeholder = document.createElement("div");
+  placeholder.className = "photo-card-placeholder";
+  placeholder.dataset.recycleId = card.dataset.id;
+  card.replaceWith(placeholder);
+
+  // Empty the card before pooling (clears hover timers and preview videos
+  // too) and drop its observer registrations so dropped cards can be GC'd.
+  unloadCardContent(card);
+  galleryObserver.unobserve(card);
+  farObserver.unobserve(card);
+
+  if (cardPool.length < CARD_POOL_LIMIT) {
+    cardPool.push(card);
+  }
+
+  farObserver.observe(placeholder);
+}
+
+function restoreCard(placeholder) {
+  farObserver.unobserve(placeholder);
+  const photo = photoById.get(Number(placeholder.dataset.recycleId));
+  if (!photo) {
+    // The photo left the current view (filter switch) while it was
+    // recycled — the placeholder has nothing to restore into.
+    placeholder.remove();
+    return;
+  }
+
+  const card = cardPool.pop() || buildNewCard();
+  card.setAttribute("data-id", photo.id);
+
+  // Suppress the fadeIn animation for one frame so restored cards don't
+  // replay the entry animation as the user scrolls back.
+  card.classList.add("no-anim");
+  placeholder.replaceWith(card);
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+      card.classList.remove("no-anim");
+    });
+  });
+
+  galleryObserver.observe(card);
+  farObserver.observe(card);
 }
 
 export function unloadCardContent(card) {
@@ -128,59 +208,70 @@ function renderCardContent(card, photo) {
   card.appendChild(favBtn);
 }
 
-function createPhotoCard(photo) {
+function buildNewCard() {
+  // Card listeners are bound once per card *element* and read the photo
+  // identity from the card's data-id at event time, so pooled cards can be
+  // reused for any photo without rebinding. Hover-preview eligibility is
+  // therefore checked inside the timer, not at bind time.
   const card = document.createElement("div");
   card.className = "photo-card";
-  card.setAttribute("data-id", photo.id);
 
   card.addEventListener("click", function () {
-    const idx = photoIndexById.get(photo.id);
+    const idx = photoIndexById.get(Number(card.dataset.id));
     if (idx !== undefined) {
       openModal(idx);
     }
   });
 
-  // Hover-preview listeners are registered once per card (not on every
-  // content render) so virtualized re-renders can't stack duplicate
-  // handlers. The timer handle lives on the card itself, where
-  // unloadCardContent can clear it.
-  if ((photo.is_live_photo && photo.live_photo_mov) || photo.is_motion_photo) {
-    card.addEventListener("mouseenter", function () {
-      card.__hoverTimer = setTimeout(function () {
-        const existing = card.querySelector("video");
-        if (existing) {
-          existing.play().catch(function () {});
-          return;
-        }
-        if (!card.hasAttribute("data-rendered")) return;
-        const video = document.createElement("video");
-        video.muted = true;
-        video.loop = true;
-        video.playsInline = true;
-        video.src = "/api/photos/" + photo.id +
-          (photo.is_motion_photo ? "/motion-video" : "/live-video");
-        video.play().catch(function () {});
-        card.appendChild(video);
-      }, 200);
-    });
+  card.addEventListener("mouseenter", function () {
+    card.__hoverTimer = setTimeout(function () {
+      const photo = photoById.get(Number(card.dataset.id));
+      const eligible = photo &&
+        ((photo.is_live_photo && photo.live_photo_mov) || photo.is_motion_photo);
+      if (!eligible) return;
+      const existing = card.querySelector("video");
+      if (existing) {
+        existing.play().catch(function () {});
+        return;
+      }
+      if (!card.hasAttribute("data-rendered")) return;
+      const video = document.createElement("video");
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.src = "/api/photos/" + photo.id +
+        (photo.is_motion_photo ? "/motion-video" : "/live-video");
+      video.play().catch(function () {});
+      card.appendChild(video);
+    }, 200);
+  });
 
-    card.addEventListener("mouseleave", function () {
-      if (card.__hoverTimer) {
-        clearTimeout(card.__hoverTimer);
-        card.__hoverTimer = null;
-      }
-      const video = card.querySelector("video");
-      if (video) {
-        video.pause();
-        video.removeAttribute("src");
-        video.load();
-        video.remove();
-      }
-    });
-  }
+  card.addEventListener("mouseleave", function () {
+    if (card.__hoverTimer) {
+      clearTimeout(card.__hoverTimer);
+      card.__hoverTimer = null;
+    }
+    const video = card.querySelector("video");
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      video.remove();
+    }
+  });
+
+  return card;
+}
+
+function createPhotoCard(photo) {
+  const card = cardPool.pop() || buildNewCard();
+  card.setAttribute("data-id", photo.id);
 
   if (galleryObserver) {
     galleryObserver.observe(card);
+    if (farObserver) {
+      farObserver.observe(card);
+    }
   } else {
     renderCardContent(card, photo);
   }
@@ -424,26 +515,44 @@ export function syncFilterUI() {
 document.addEventListener("favorite-changed", function (e) {
   const { photoId, isFavorite } = e.detail;
   const card = document.querySelector(`.photo-card[data-id="${photoId}"]`);
-  if (!card) return;
 
-  const favBtn = card.querySelector(".photo-card-fav-btn");
-  if (favBtn) {
-    favBtn.classList.toggle("active", isFavorite);
-    favBtn.innerHTML = isFavorite ? "★" : "☆";
-    const label = isFavorite ? t("unfavorite_btn") : t("favorite_btn");
-    favBtn.title = label;
-    favBtn.setAttribute("aria-label", label);
+  if (card) {
+    const favBtn = card.querySelector(".photo-card-fav-btn");
+    if (favBtn) {
+      favBtn.classList.toggle("active", isFavorite);
+      favBtn.innerHTML = isFavorite ? "★" : "☆";
+      const label = isFavorite ? t("unfavorite_btn") : t("favorite_btn");
+      favBtn.title = label;
+      favBtn.setAttribute("aria-label", label);
+    }
   }
 
-  // If currently filtered by favorites and unfavorited, animate card removal
+  // If currently filtered by favorites and unfavorited, remove the photo
+  // from the view. Its card may be pooled behind a lightweight placeholder
+  // if it is far off-screen — remove that too, and drop the recycled copy
+  // from the pool by leaving it unclaimed (a stale pool entry's identity is
+  // replaced whenever the pool hands it to another photo).
   if (state.activeFilter === "favorites" && !isFavorite) {
+    const placeholder = document.querySelector(
+      `.photo-card-placeholder[data-recycle-id="${photoId}"]`
+    );
+    if (placeholder) {
+      farObserver && farObserver.unobserve(placeholder);
+      placeholder.remove();
+    }
+    if (!card) return;
+
     card.style.transition = "opacity 0.25s ease, transform 0.25s ease";
     card.style.opacity = "0";
     card.style.transform = "scale(0.9)";
     setTimeout(() => {
+      galleryObserver && galleryObserver.unobserve(card);
+      farObserver && farObserver.unobserve(card);
       card.remove();
       const gallery = $("gallery");
-      if (gallery && !gallery.querySelector(".photo-card")) {
+      // Placeholders stand in for real remaining photos — the view is only
+      // empty when neither a card nor a placeholder is left.
+      if (gallery && !gallery.querySelector(".photo-card, .photo-card-placeholder")) {
         gallery.replaceChildren(createEmptyState("⭐", t("no_favorites"), t("no_favorites_hint")));
       }
     }, 250);

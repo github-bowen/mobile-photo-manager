@@ -513,6 +513,14 @@ body.theme-dark .toggle-pill-bg {
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
+/* Skeleton box swapped in for cards recycled far off-screen; same
+   footprint as .photo-card so the grid never reflows on swap. */
+.photo-card-placeholder {
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
 .photo-card:hover {
   transform: scale(1.02);
   box-shadow: var(--shadow-md);
@@ -1289,6 +1297,12 @@ body.theme-dark .toggle-pill-bg {
 
 .photo-card {
   animation: fadeIn var(--transition-normal) ease both;
+}
+
+/* Pool-restored cards must not replay the entry animation. */
+.photo-card.no-anim,
+.photo-card.no-anim:hover {
+  animation: none;
 }
 
 .gallery-date-group:nth-child(1) .photo-card { animation-delay: 0ms; }
