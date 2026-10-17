@@ -8,6 +8,22 @@ import { toggleFavorite } from './favorites.js';
 let galleryObserver = null;
 const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
 
+// O(1) photo lookups. The IntersectionObserver callback fires for every
+// card crossing the viewport edge, so a linear find() over state.photos
+// there costs O(N) per scroll burst on large libraries. Rebuilt whenever
+// state.photos is reassigned or appended (loadPhotos).
+const photoById = new Map();
+const photoIndexById = new Map();
+
+function rebuildPhotoIndex() {
+  photoById.clear();
+  photoIndexById.clear();
+  state.photos.forEach(function (photo, index) {
+    photoById.set(photo.id, photo);
+    photoIndexById.set(photo.id, index);
+  });
+}
+
 function initVirtualization() {
   if (galleryObserver) {
     galleryObserver.disconnect();
@@ -16,8 +32,8 @@ function initVirtualization() {
   galleryObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       const card = entry.target;
-      const photoId = card.dataset.id;
-      const photo = state.photos.find(p => p.id.toString() === photoId);
+      const photoId = Number(card.dataset.id);
+      const photo = photoById.get(photoId);
       if (!photo) return;
 
       if (entry.isIntersecting) {
@@ -118,8 +134,8 @@ function createPhotoCard(photo) {
   card.setAttribute("data-id", photo.id);
 
   card.addEventListener("click", function () {
-    const idx = state.photos.findIndex(function (p) { return p.id === photo.id; });
-    if (idx >= 0) {
+    const idx = photoIndexById.get(photo.id);
+    if (idx !== undefined) {
       openModal(idx);
     }
   });
@@ -339,6 +355,7 @@ export async function loadPhotos(append) {
     } else {
       state.photos = data.photos;
     }
+    rebuildPhotoIndex();
     state.total = data.total;
     state.totalPages = data.pages;
 
