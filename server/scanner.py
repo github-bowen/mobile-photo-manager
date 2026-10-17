@@ -13,7 +13,6 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Optional
 from PIL import Image
-from PIL.ExifTags import TAGS, GPSTAGS
 
 # Register HEIC support with Pillow
 import pillow_heif

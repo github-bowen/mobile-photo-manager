@@ -8,7 +8,6 @@ import asyncio
 import glob
 import os
 import logging
-import mimetypes
 import json
 import re
 from contextlib import asynccontextmanager
@@ -38,8 +37,8 @@ from server.scanner import (
     SCAN_VERSION, build_takeout_sidecar_indexes, get_all_file_states_on_disk,
     get_takeout_sidecar_state_on_disk, scan_specific_files, detect_changed_files
 )
-from server.thumbnail import generate_thumbnail, get_thumbnail_path, thumbnail_exists, invalidate_thumbnail
-from server.geocoder import reverse_geocode, batch_reverse_geocode
+from server.thumbnail import generate_thumbnail, get_thumbnail_path, invalidate_thumbnail
+from server.geocoder import batch_reverse_geocode
 
 # Configure logging
 logging.basicConfig(
@@ -766,7 +765,6 @@ async def api_get_photo_render(photo_id: int):
                 headers={"Cache-Control": f"public, max-age={HTTP_CACHE_MAX_AGE}"}
             )
 
-        import io
         from PIL import Image, ImageOps
         import pillow_heif
         pillow_heif.register_heif_opener()

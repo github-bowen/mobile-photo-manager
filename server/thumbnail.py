@@ -5,7 +5,6 @@ Generates WebP thumbnails at two sizes: small (200px) and medium (800px).
 
 import os
 import logging
-import hashlib
 from PIL import Image, ImageOps
 
 # Ensure HEIC support is registered
@@ -198,7 +197,7 @@ def _generate_mov_thumbnail(filepath: str, full_path: str) -> bool:
         logger.error("Failed to generate real video thumbnail, falling back to generic: %s", e)
 
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw
         img = Image.new("RGB", (800, 800), color=(40, 40, 40))
         draw = ImageDraw.Draw(img)
         # Draw a simple play triangle

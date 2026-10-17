@@ -1,11 +1,11 @@
 """
 Geocoder module for the iPhone Photo Manager.
-Uses Nominatim API with coordinate deduplication and rate limiting.
+Offline reverse geocoding via reverse_geocoder, with per-batch coordinate
+deduplication; coordinates inside China fall back to BigDataCloud so the
+location comes back in Chinese.
 """
 
 import logging
-import time
-import json
 import reverse_geocoder as rg
 import pycountry
 from typing import Optional
