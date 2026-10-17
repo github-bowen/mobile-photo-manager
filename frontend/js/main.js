@@ -127,8 +127,13 @@ function setupFilters() {
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(function () {
         const val = searchInput.value.trim();
-        state.activeLocation = val || null;
+        state.searchQuery = val;
+        // Free-text search and location filters are mutually exclusive:
+        // typing here drops any sidebar-picked place, keeping the query
+        // string unambiguous (and the sidebar in charge when it's used).
+        state.activeLocation = null;
         state.activeCountry = null;
+        state.activeCity = null;
         resetAndReload();
       }, 400);
     });

@@ -146,6 +146,9 @@ async function startAutoplay() {
   const countries = Array.from(countryCheckboxes).map(cb => cb.value);
   state.activeCountry = countries.length > 0 ? countries.join(',') : null;
   state.activeLocation = null; // Clear exact location filter to avoid conflicts
+  // The config modal owns the full filter set; a leftover free-text search
+  // would narrow the slideshow beyond what its checkboxes show.
+  state.searchQuery = "";
   
   const wantsPhoto = $('autoplay-type-photo').checked;
   const wantsVideo = $('autoplay-type-video').checked;

@@ -148,6 +148,14 @@ export async function loadLocations() {
   }
 }
 
+// Picking a place in the sidebar owns the location filter; a leftover
+// free-text search would silently narrow the result further, so every
+// sidebar selection clears the search box and its state together.
+function clearSearch() {
+  state.searchQuery = "";
+  if (searchInput) searchInput.value = "";
+}
+
 export function renderLocations() {
   if (!sidebarLocations) return;
   sidebarLocations.replaceChildren();
@@ -156,7 +164,7 @@ export function renderLocations() {
     state.activeLocation = null;
     state.activeCity = null;
     state.activeCountry = null;
-    if (searchInput) searchInput.value = "";
+    clearSearch();
     resetAndReload();
     setActiveSidebarItem(sidebarLocations, allItem);
   });
@@ -196,7 +204,7 @@ export function renderLocations() {
       state.activeLocation = null;
       state.activeCity = null;
       state.activeCountry = countryEn;
-      if (searchInput) searchInput.value = data.display;
+      clearSearch();
       resetAndReload();
       resetSidebarTimer();
       
@@ -241,7 +249,7 @@ export function renderLocations() {
            state.activeLocation = null;
            state.activeCity = cityKey;
            state.activeCountry = countryEn;
-           if (searchInput) searchInput.value = cityData.display;
+           clearSearch();
            resetAndReload();
            resetSidebarTimer();
            renderLocations();

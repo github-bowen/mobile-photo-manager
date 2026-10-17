@@ -603,6 +603,7 @@ async def api_get_photos(
     favorites: Optional[bool] = Query(None),
     lang: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("desc"),
+    search: Optional[str] = Query(None),
 ):
     """Get paginated list of photos with optional filters."""
     page = page if isinstance(page, int) else 1
@@ -614,6 +615,7 @@ async def api_get_photos(
     country = country if isinstance(country, str) else None
     date_from = date_from if isinstance(date_from, str) else None
     date_to = date_to if isinstance(date_to, str) else None
+    search = search if isinstance(search, str) else None
     if isinstance(screenshots, str):
         screenshots = screenshots.lower() in ("true", "1", "yes")
     elif not isinstance(screenshots, bool):
@@ -635,6 +637,15 @@ async def api_get_photos(
                 if original not in loc_param:
                     loc_param.append(original)
 
+        # Free-text search: split into words, each (word, translated-location
+        # originals) pair becomes one ANDed group inside build_photo_filters.
+        search_terms = None
+        if search and search.strip():
+            search_terms = []
+            for word in search.split():
+                candidates = [c for c in _translations.reverse_lookup(word) if c != word]
+                search_terms.append((word, candidates))
+
         photos, total = await get_photos(
             db,
             page=page,
@@ -649,6 +660,7 @@ async def api_get_photos(
             is_screenshot=screenshots,
             is_favorite=favorites,
             sort_order=sort_order,
+            search_terms=search_terms,
         )
         target_lang = lang if lang else os.getenv("APP_LANGUAGE", "zh")
         if target_lang == "zh":

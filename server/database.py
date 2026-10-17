@@ -269,11 +269,18 @@ def build_photo_filters(
     is_screenshot: Optional[bool] = None,
     is_favorite: Optional[bool] = None,
     category: Optional[str] = None,
+    search_terms: Optional[list[tuple[str, list[str]]]] = None,
 ) -> tuple[str, list]:
     """Build the shared WHERE clause for photo listing queries.
 
     Returned as (where_sql, params) so count and page queries — and any
     other listing endpoint — agree exactly on the filter semantics.
+
+    search_terms: free-text search, pre-split into (word, extra_locations)
+    pairs. Every word must match somewhere (AND between words); a word
+    matches filename, description or location_name (OR within a word),
+    plus any translated-location originals the caller resolved — so a
+    Chinese query can hit the English location names stored in the DB.
     """
     conditions = ["file_type != 'AAE'"]
     params = []
@@ -386,6 +393,28 @@ def build_photo_filters(
         conditions.append("is_favorite = ?")
         params.append(1 if is_favorite else 0)
 
+    if search_terms:
+        # Free-text search: every word must match (AND), each word matching
+        # any of filename / description / location_name (OR). The caller may
+        # attach extra location_name candidates per word (translation-index
+        # originals resolved from a non-English query), which are ORed into
+        # the same group. User input goes through LIKE, so %, _ and \ are
+        # escaped and matched literally under ESCAPE '\'.
+        def _like_escape(term: str) -> str:
+            return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        for word, extra_locations in search_terms:
+            or_conds = []
+            for field in ("filename", "description", "location_name"):
+                or_conds.append(f"{field} LIKE ? ESCAPE '\\'")
+                params.append(f"%{_like_escape(word)}%")
+            for candidate in extra_locations or []:
+                # Candidates are stored location values, not user input —
+                # they still pass through the same escaping for safety.
+                or_conds.append("location_name LIKE ? ESCAPE '\\'")
+                params.append(f"%{_like_escape(candidate)}%")
+            conditions.append("(" + " OR ".join(or_conds) + ")")
+
     return " AND ".join(conditions), params
 
 
@@ -403,6 +432,7 @@ async def get_photos(
     is_favorite: Optional[bool] = None,
     sort_order: str = "desc",
     category: Optional[str] = None,
+    search_terms: Optional[list[tuple[str, list[str]]]] = None,
 ) -> tuple[list[dict], int]:
     """Get paginated photos with optional filters. Returns (photos, total_count)."""
     where, params = build_photo_filters(
@@ -415,6 +445,7 @@ async def get_photos(
         is_screenshot=is_screenshot,
         is_favorite=is_favorite,
         category=category,
+        search_terms=search_terms,
     )
 
     # Get total count

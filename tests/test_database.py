@@ -441,6 +441,80 @@ class DatabaseMigrationTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_free_text_search_matches_filename_description_location(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                db_path = os.path.join(temp_dir, "photos.db")
+                original_path = database.DB_PATH
+                database.DB_PATH = db_path
+                try:
+                    await database.init_db()
+                    db = await database.get_db()
+                    try:
+                        fixtures = [
+                            {"filepath": "202601/IMG_1234.jpg",
+                             "filename": "IMG_1234.jpg", "file_type": "JPG",
+                             "description": "sunset at the beach"},
+                            {"filepath": "202601/beach_notes.jpg",
+                             "filename": "beach_notes.jpg", "file_type": "JPG",
+                             "location_name": "Beach City, Testland"},
+                            {"filepath": "202601/plain.jpg",
+                             "filename": "plain.jpg", "file_type": "JPG"},
+                        ]
+                        for f in fixtures:
+                            await database.insert_photo(db, {
+                                **f,
+                                "directory": "202601",
+                                "file_size": 1000,
+                            })
+
+                        # Word hits filename.
+                        photos, total = await database.get_photos(
+                            db, search_terms=[("IMG_1234", [])])
+                        self.assertEqual(total, 1)
+                        self.assertEqual(photos[0]["filename"], "IMG_1234.jpg")
+
+                        # Word hits description.
+                        _, total = await database.get_photos(
+                            db, search_terms=[("sunset", [])])
+                        self.assertEqual(total, 1)
+
+                        # Word hits location_name.
+                        _, total = await database.get_photos(
+                            db, search_terms=[("Beach", [])])
+                        self.assertEqual(total, 2)
+
+                        # Extra translated-location candidates OR into the
+                        # same group (zh query -> stored English name).
+                        _, total = await database.get_photos(
+                            db, search_terms=[("海滩", ["Beach City, Testland"])])
+                        self.assertEqual(total, 1)
+
+                        # Multiple words are ANDed across groups.
+                        photos, total = await database.get_photos(
+                            db, search_terms=[("beach", []), ("notes", [])])
+                        names = {p["filename"] for p in photos}
+                        self.assertEqual(names, {"beach_notes.jpg"})
+
+                        # LIKE wildcards in the query are literal characters.
+                        await database.insert_photo(db, {
+                            "filepath": "202601/100pct.jpg",
+                            "filename": "100pct.jpg", "file_type": "JPG",
+                            "directory": "202601", "file_size": 1000,
+                        })
+                        _, total = await database.get_photos(
+                            db, search_terms=[("%", [])])
+                        self.assertEqual(total, 0)
+                        _, total = await database.get_photos(
+                            db, search_terms=[("100pct", [])])
+                        self.assertEqual(total, 1)
+                    finally:
+                        await db.close()
+                finally:
+                    database.DB_PATH = original_path
+
+        asyncio.run(run_test())
+
 
 if __name__ == "__main__":
     unittest.main()

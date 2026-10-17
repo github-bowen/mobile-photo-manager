@@ -444,6 +444,7 @@ export async function loadPhotos(append) {
     }
   }
 
+  if (state.searchQuery) params.set("search", state.searchQuery);
   if (state.activeLocation) params.set("location", state.activeLocation);
   if (state.activeCountry) params.set("country", state.activeCountry);
   if (state.activeCity) params.set("city", state.activeCity);
@@ -518,6 +519,9 @@ export function syncFilterUI() {
   const dateToInput = $("date-to");
   if (dateFromInput) dateFromInput.value = state.dateFrom || "";
   if (dateToInput) dateToInput.value = state.dateTo || "";
+
+  const searchInput = $("search-input");
+  if (searchInput) searchInput.value = state.searchQuery || "";
 
   const sortToggle = $("sort-toggle");
   if (sortToggle) sortToggle.classList.toggle("active", state.sortOrder === "asc");
