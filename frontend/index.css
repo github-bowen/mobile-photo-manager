@@ -35,7 +35,10 @@
   --error: #ef4444;
 }
 
-body.theme-dark {
+/* Dual-form selector: main.js sets body.theme-dark, while boot.js sets
+   html[data-theme="dark"] before first paint — both must switch the
+   palette so theming works pre- and post-init. */
+:is(body.theme-dark, html[data-theme="dark"] body) {
   --bg-primary: #08080d;
   --bg-secondary: #0f0f17;
   --bg-tertiary: #161624;
@@ -154,7 +157,7 @@ body {
   align-items: center;
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
 }
-body.theme-dark .toggle-pill {
+:is(body.theme-dark, html[data-theme="dark"] body) .toggle-pill {
   background: rgba(255, 255, 255, 0.05);
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
@@ -184,7 +187,7 @@ body.theme-dark .toggle-pill {
   transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   z-index: 1;
 }
-body.theme-dark .toggle-pill-bg {
+:is(body.theme-dark, html[data-theme="dark"] body) .toggle-pill-bg {
   box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.2), inset 0 1px 1px rgba(255,255,255,0.1);
 }
 

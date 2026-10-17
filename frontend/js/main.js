@@ -156,6 +156,15 @@ function setupFilters() {
   }
 }
 
+// Theme is stored on BOTH the body class (legacy + component selectors)
+// and html[data-theme] (set pre-paint by boot.js). classList, not className
+// — a bare className assignment would clobber any other body class.
+function applyTheme() {
+  document.body.classList.remove("theme-light", "theme-dark");
+  document.body.classList.add("theme-" + state.theme);
+  document.documentElement.setAttribute("data-theme", state.theme);
+}
+
 async function init() {
   const langToggle = $("lang-toggle");
   const loadOriginalToggle = $("load-original-toggle");
@@ -206,7 +215,7 @@ async function init() {
   }
 
   applyTranslations();
-  document.body.className = "theme-" + state.theme;
+  applyTheme();
 
   setupFilters();
   setupModalEvents();
@@ -236,7 +245,7 @@ async function init() {
       this.classList.toggle("active");
       state.theme = this.classList.contains("active") ? "dark" : "light";
       localStorage.setItem("app_theme", state.theme);
-      document.body.className = "theme-" + state.theme;
+      applyTheme();
     });
   }
 
