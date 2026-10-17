@@ -130,9 +130,20 @@ scan_state = {
 # two rapid POST /api/scan/start calls.
 _scan_task: Optional[asyncio.Task] = None
 
-# Serializes HEIC render-cache generation so two concurrent first-requests
-# can't render the same photo twice (or serve a partially written JPEG).
+# Serializes HEIC render-cache generation for a single photo so two
+# concurrent first-requests can't render the same photo twice (or serve a
+# partially written JPEG).
 _render_lock = asyncio.Lock()
+
+# Decode concurrency across thumbnail generation and HEIC rendering. A 48MP
+# HEIC full decode peaks around ~200MB, so the default of 3 keeps peak
+# memory near 600MB; tunable via THUMBNAIL_WORKERS.
+THUMBNAIL_WORKERS = max(1, int(os.getenv("THUMBNAIL_WORKERS", "3")))
+_thumbnail_semaphore = asyncio.Semaphore(THUMBNAIL_WORKERS)
+
+# Per-filepath Event for on-demand generation so concurrent requests for
+# the same photo don't duplicate the work.
+_thumb_inflight: dict = {}
 
 
 def _scan_in_progress() -> bool:
@@ -355,10 +366,8 @@ async def _generate_all_thumbnails():
         if not photos:
             break
 
-        sem = asyncio.Semaphore(1)
-        
         async def process_photo(photo):
-            async with sem:
+            async with _thumbnail_semaphore:
                 success = await asyncio.to_thread(
                     generate_thumbnail,
                     photo["id"],
@@ -369,12 +378,21 @@ async def _generate_all_thumbnails():
 
         results = await asyncio.gather(*(process_photo(p) for p in photos))
 
-        for photo_id, success in results:
-            if success:
-                await update_photo(db, photo_id, {"has_thumbnail": 1})
-                total_generated += 1
-            else:
-                await update_photo(db, photo_id, {"has_thumbnail": -1})
+        # Commit the whole batch once instead of per-photo UPDATE+commit.
+        succeeded = [photo_id for photo_id, ok in results if ok]
+        failed = [photo_id for photo_id, ok in results if not ok]
+        if succeeded:
+            await db.executemany(
+                "UPDATE photos SET has_thumbnail = 1 WHERE id = ?",
+                [(photo_id,) for photo_id in succeeded],
+            )
+            total_generated += len(succeeded)
+        if failed:
+            await db.executemany(
+                "UPDATE photos SET has_thumbnail = -1 WHERE id = ?",
+                [(photo_id,) for photo_id in failed],
+            )
+        await db.commit()
 
         scan_state["message"] = f"Generated {total_generated} thumbnails..."
         logger.info("Generated %d thumbnails so far...", total_generated)
@@ -656,44 +674,39 @@ async def api_get_photo_render(photo_id: int):
             )
 
         import io
-        from PIL import Image
+        from PIL import Image, ImageOps
         import pillow_heif
         pillow_heif.register_heif_opener()
 
         def convert_to_jpeg():
-            img = Image.open(full_path)
-            exif = img.getexif()
-            if exif:
-                orientation = exif.get(274)
-                if orientation:
-                    rotation_map = {3: 180, 6: 270, 8: 90}
-                    if orientation in rotation_map:
-                        img = img.rotate(rotation_map[orientation], expand=True)
-                    elif orientation in (2, 4, 5, 7):
-                        img = img.transpose(Image.FLIP_LEFT_RIGHT)
-                        if orientation in (5, 7):
-                            img = img.rotate(90 if orientation == 5 else 270, expand=True)
+            with Image.open(full_path) as img:
+                # Apply the EXIF orientation flag (flips + rotations) once,
+                # instead of hand-mapping orientation values.
+                img = ImageOps.exif_transpose(img)
 
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
 
-            # Limit max size to 4K to speed up JPEG encoding and reduce memory footprint
-            # while still maintaining visually "full" quality on modern screens.
-            img.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
+                # Limit max size to 4K to speed up JPEG encoding and reduce memory footprint
+                # while still maintaining visually "full" quality on modern screens.
+                img.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
 
-            # Write to a temp file, then swap into place so a concurrent
-            # reader can never observe a partially written JPEG.
-            tmp_path = cached_path + ".tmp"
-            img.save(tmp_path, format="JPEG", quality=85, optimize=True)
-            img.close()
+                # Write to a temp file, then swap into place so a concurrent
+                # reader can never observe a partially written JPEG.
+                tmp_path = cached_path + ".tmp"
+                img.save(tmp_path, format="JPEG", quality=85, optimize=True)
             os.replace(tmp_path, cached_path)
 
         async with _render_lock:
             # Re-check under the lock: a concurrent request may have finished
             # rendering while we waited.
             if not os.path.exists(cached_path):
-                await asyncio.to_thread(convert_to_jpeg)
-                await asyncio.to_thread(_cleanup_old_renders, render_dir, photo_id, cached_path)
+                # Take a decode slot from the shared pool — HEIC rendering
+                # costs about the same memory as thumbnail generation.
+                async with _thumbnail_semaphore:
+                    if not os.path.exists(cached_path):
+                        await asyncio.to_thread(convert_to_jpeg)
+                        await asyncio.to_thread(_cleanup_old_renders, render_dir, photo_id, cached_path)
         
         return FileResponse(
             cached_path,
@@ -807,8 +820,8 @@ async def api_get_motion_video(photo_id: int, request: Request):
     )
 
 
-# Global semaphore for on-demand thumbnail generation to prevent OOM from cv2
-thumbnail_semaphore = asyncio.Semaphore(1)
+# Global semaphore for on-demand thumbnail generation — shared with the
+# batch generator so total decode concurrency stays within THUMBNAIL_WORKERS.
 
 @app.get("/api/photos/{photo_id}/thumbnail/{size}")
 async def api_get_thumbnail(photo_id: int, size: str):
@@ -825,15 +838,33 @@ async def api_get_thumbnail(photo_id: int, size: str):
         thumb_path = get_thumbnail_path(photo["filepath"], size)
 
         if not os.path.exists(thumb_path):
-            # Try to generate on-demand
-            async with thumbnail_semaphore:
-                success = await asyncio.to_thread(
-                    generate_thumbnail, photo_id, photo["filepath"], photo["file_type"]
-                )
-            if success:
-                await update_photo(db, photo_id, {"has_thumbnail": 1})
+            # On-demand generation. Concurrent requests for the same file
+            # wait on the in-flight generation instead of repeating it.
+            key = photo["filepath"]
+            inflight = _thumb_inflight.get(key)
+            if inflight is None:
+                event = asyncio.Event()
+                _thumb_inflight[key] = event
+                try:
+                    async with _thumbnail_semaphore:
+                        if not os.path.exists(thumb_path):
+                            success = await asyncio.to_thread(
+                                generate_thumbnail, photo_id, photo["filepath"], photo["file_type"]
+                            )
+                        else:
+                            success = True
+                finally:
+                    _thumb_inflight.pop(key, None)
+                    event.set()
+
+                if success:
+                    await update_photo(db, photo_id, {"has_thumbnail": 1})
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
             else:
-                raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
+                await inflight.wait()
+                # The generating request already marked has_thumbnail; if it
+                # failed the re-check below turns this into a 404.
     finally:
         await db.close()
 

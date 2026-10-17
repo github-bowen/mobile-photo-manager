@@ -164,6 +164,41 @@ class UpsertRefreshesMtimeTests(unittest.TestCase):
         asyncio.run(run_test())
 
 
+class ThumbnailGenerationTests(unittest.TestCase):
+    def test_image_thumbnail_medium_then_small_with_exif_orientation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            photos_dir = os.path.join(temp_dir, "photos")
+            thumb_dir = os.path.join(temp_dir, "thumbs")
+            os.makedirs(photos_dir)
+            img_path = os.path.join(photos_dir, "test.jpg")
+            img = Image.new("RGB", (1600, 900), (10, 20, 30))
+            exif = Image.Exif()
+            exif[274] = 6  # rotate 270° to display
+            img.save(img_path, format="JPEG", exif=exif)
+
+            original_photos = thumbnail.PHOTOS_DIR
+            original_thumbs = thumbnail.THUMBNAIL_DIR
+            thumbnail.PHOTOS_DIR = photos_dir
+            thumbnail.THUMBNAIL_DIR = thumb_dir
+            try:
+                self.assertTrue(thumbnail.generate_thumbnail(1, "test.jpg", "JPG"))
+
+                medium = Image.open(thumbnail.get_thumbnail_path("test.jpg", "medium"))
+                small = Image.open(thumbnail.get_thumbnail_path("test.jpg", "small"))
+                try:
+                    # Orientation 6 transposes 1600x900 into 900x1600; from
+                    # there medium keeps the 800 max dimension and small is
+                    # derived from medium, not from a second full decode.
+                    self.assertEqual(medium.size, (450, 800))
+                    self.assertEqual(small.size, (112, 200))
+                finally:
+                    medium.close()
+                    small.close()
+            finally:
+                thumbnail.PHOTOS_DIR = original_photos
+                thumbnail.THUMBNAIL_DIR = original_thumbs
+
+
 class RenderCacheKeyTests(unittest.TestCase):
     def test_render_key_rotates_and_old_renders_are_cleaned(self):
         async def run_test():
