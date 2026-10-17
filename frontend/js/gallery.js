@@ -369,11 +369,6 @@ export function renderGallery(append) {
           let city = partsDisp[0];
           if (city.includes(" (")) city = city.split(" (")[0];
           if (city.includes(" / ")) city = city.split(" / ")[0];
-          if (state.language === "zh" && (city.toLowerCase() === "zuerich" || city === "Zurich")) {
-              city = "苏黎世";
-          } else if (state.language === "en" && (city.toLowerCase() === "zuerich" || city === "苏黎世")) {
-              city = "Zurich";
-          }
           city = city.trim();
 
           if (!locationSets[country]) locationSets[country] = new Set();

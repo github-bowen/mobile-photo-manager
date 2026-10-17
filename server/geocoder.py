@@ -12,6 +12,27 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# reverse_geocoder ships localized proper names: for a few places its
+# "name" field carries a German spelling ("Zuerich") instead of the
+# English exonym ("Zurich"). Normalize at the source - here, where the
+# string is born - so the database, search filters, translation cache
+# and every display layer agree on one spelling without per-screen
+# remap hacks. Conservative by design: only confirmed offenders.
+EXONYM_MAP = {
+    "Zuerich": "Zurich",
+}
+
+
+def normalize_location_text(text: str) -> str:
+    """Replace every known localized spelling with its English exonym.
+
+    Substring-based because callers pass assembled location strings
+    ("Zuerich, Switzerland"), not bare city names.
+    """
+    for src, dst in EXONYM_MAP.items():
+        text = text.replace(src, dst)
+    return text
+
 # In-memory cache for coordinates: (lat_round, lng_round) -> "Location String"
 _geocode_cache = {}
 
@@ -90,9 +111,9 @@ def batch_reverse_geocode(coordinates: list[tuple[float, float]]) -> list[Option
                 _geocode_cache[coord_key] = loc_str
                 continue
 
-            name = res.get('name', '')
-            admin1 = res.get('admin1', '')
-            admin2 = res.get('admin2', '')
+            name = normalize_location_text(res.get('name', ''))
+            admin1 = normalize_location_text(res.get('admin1', ''))
+            admin2 = normalize_location_text(res.get('admin2', ''))
             cc = res.get('cc', '')
             
             # Map country code to full country name

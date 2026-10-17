@@ -120,6 +120,21 @@ def _photo_list_columns() -> str:
     return ", ".join(ordered)
 
 
+# One-time rewrites of existing row contents, gated by PRAGMA user_version.
+# Schema changes belong in MIGRATIONS above; these fix data and must run
+# exactly once per database file.
+DATA_MIGRATIONS: dict[int, list[str]] = {
+    # v1: the offline geocoder used to store the German spelling
+    # "Zuerich"; it now normalizes exonyms at the source, so rewrite
+    # stored names to match (city/country queries then hit one spelling).
+    1: [
+        "UPDATE photos "
+        "SET location_name = REPLACE(location_name, 'Zuerich', 'Zurich') "
+        "WHERE location_name LIKE '%Zuerich%'",
+    ],
+}
+
+
 async def init_db():
     """Initialize the database and create tables if needed."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -137,6 +152,13 @@ async def init_db():
                 await db.execute(f"ALTER TABLE photos ADD COLUMN {name} {definition}")
         for statement in INDEX_MIGRATIONS:
             await db.execute(statement)
+        version = (await (await db.execute("PRAGMA user_version")).fetchall())[0][0]
+        for target, statements in DATA_MIGRATIONS.items():
+            if version < target:
+                for statement in statements:
+                    await db.execute(statement)
+                version = target
+        await db.execute(f"PRAGMA user_version = {version}")
         await db.commit()
 
 
@@ -348,9 +370,8 @@ def build_photo_filters(
                 conditions.append("(" + " OR ".join(loc_conds) + ")")
 
     if city:
-        cq = "Zuerich" if city == "Zurich" else city
         conditions.append("(location_name LIKE ? OR location_name LIKE ?)")
-        params.extend([f"{cq}%", f"% {cq}%"])
+        params.extend([f"{city}%", f"% {city}%"])
 
     if country:
         countries = [c.strip() for c in country.split(",") if c.strip()]

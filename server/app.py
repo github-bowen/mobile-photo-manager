@@ -40,7 +40,7 @@ from server.scanner import (
     get_takeout_sidecar_state_on_disk, scan_specific_files, detect_changed_files
 )
 from server.thumbnail import generate_thumbnail, get_thumbnail_path, invalidate_thumbnail
-from server.geocoder import batch_reverse_geocode
+from server.geocoder import batch_reverse_geocode, normalize_location_text
 
 # Configure logging
 logging.basicConfig(
@@ -92,6 +92,10 @@ class TranslationCache:
                 if "|||" not in key:
                     continue
                 original, lang = key.split("|||", 1)
+                # Older caches may predate exonym normalization in the
+                # geocoder; re-key German spellings ("Zuerich") onto the
+                # English exonym so lookups for the normalized form hit.
+                original = normalize_location_text(original)
                 self._entries[(original, lang)] = translated
                 self._by_original.setdefault(original.lower(), set()).add(original)
                 self._by_translated.setdefault(translated.lower(), set()).add(original)

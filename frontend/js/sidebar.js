@@ -221,8 +221,6 @@ export function renderLocations() {
         
         let cityEn = cleanCity(partsEn[0]);
         let cityDisp = loc.display_city || cleanCity(partsDisp[0]);
-        if (state.language === "zh" && (cityEn.toLowerCase() === "zuerich" || cityEn === "Zurich")) cityDisp = "苏黎世";
-        else if (state.language === "en" && (cityDisp.toLowerCase() === "zuerich" || cityDisp === "苏黎世")) cityDisp = "Zurich";
         
         if (!groupedCities[cityEn]) {
             groupedCities[cityEn] = { display: cityDisp, count: 0 };
