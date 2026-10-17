@@ -3,6 +3,7 @@ Database module for the iPhone Photo Manager.
 Manages SQLite database for photo metadata storage and retrieval.
 """
 
+import asyncio
 import aiosqlite
 import logging
 import os
@@ -489,25 +490,60 @@ async def get_photos_without_location(db: aiosqlite.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+# Rows eligible for timestamp backfill: no date yet, or an undetermined-date
+# sentinel. Rows with a real timestamp are never re-evaluated here — change
+# detection re-extracts metadata when a file's mtime changes, which is the
+# semantically correct trigger for a refresh.
+_BACKFILL_WHERE = (
+    "taken_at IS NULL "
+    "OR taken_at LIKE '%-99T23:59:59' "
+    "OR taken_at LIKE '%-00T00:00:00' "
+    "OR taken_at LIKE '%-01T12:00:00'"
+)
+
+
 async def backfill_missing_timestamps(db: aiosqlite.Connection, photos_dir: str) -> int:
-    """Find all photos and backfill/re-evaluate taken_at using strict 3-step logic."""
-    rows = await db.execute_fetchall("SELECT id, filepath, taken_at FROM photos")
-    if not rows:
+    """Backfill taken_at for rows with missing or sentinel dates only.
+
+    Previously this re-evaluated every row on every startup, parsing EXIF
+    for the entire library (blocking the event loop while it did). Rows that
+    already carry a real timestamp are skipped.
+    """
+    count_row = await db.execute_fetchall(
+        f"SELECT COUNT(*) FROM photos WHERE {_BACKFILL_WHERE}"
+    )
+    if not count_row or not count_row[0][0]:
         return 0
 
     from server.scanner import _determine_taken_at
-    updated_count = 0
+
+    rows = await db.execute_fetchall(
+        f"SELECT id, filepath, taken_at FROM photos WHERE {_BACKFILL_WHERE}"
+    )
     photos_dir = os.path.realpath(photos_dir)
 
+    # Every row matched here has a NULL or sentinel taken_at, so the
+    # EXIF-candidate shortcut never applies — re-derive from scratch.
+    updated: list[tuple] = []
     for photo_id, rel_path, old_taken_at in rows:
         full_path = os.path.join(photos_dir, rel_path)
-        exif_candidate = old_taken_at if old_taken_at and not old_taken_at.endswith("-99T23:59:59") and not old_taken_at.endswith("-00T00:00:00") and not old_taken_at.endswith("-01T12:00:00") else None
-        new_taken_at = _determine_taken_at(full_path, exif_candidate)
+        # _determine_taken_at reads EXIF/mtime from disk — keep it off the
+        # event loop.
+        new_taken_at = await asyncio.to_thread(_determine_taken_at, full_path, None)
+        # Undetermined-date rows re-derive to the same sentinel every time;
+        # only write rows whose value actually changes.
         if new_taken_at != old_taken_at:
-            await update_photo(db, photo_id, {"taken_at": new_taken_at})
-            updated_count += 1
+            updated.append((new_taken_at, photo_id))
 
-    return updated_count
+    # Batched writes: one commit per 100 rows instead of per row.
+    for i in range(0, len(updated), 100):
+        chunk = updated[i:i + 100]
+        await db.executemany(
+            "UPDATE photos SET taken_at = ? WHERE id = ?", chunk
+        )
+        await db.commit()
+
+    return len(updated)
 
 
 async def set_photo_favorite(

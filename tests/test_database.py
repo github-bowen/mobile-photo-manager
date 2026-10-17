@@ -177,6 +177,74 @@ class DatabaseMigrationTests(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_backfill_skips_real_timestamps_and_redo_sentinels(self):
+        async def run_test():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                db_path = os.path.join(temp_dir, "photos.db")
+                photos_dir = os.path.join(temp_dir, "photos")
+                os.makedirs(os.path.join(photos_dir, "202405"))
+                original_path = database.DB_PATH
+                database.DB_PATH = db_path
+                try:
+                    await database.init_db()
+                    db = await database.get_db()
+                    try:
+                        rows = {
+                            "202405/none.jpg": None,                 # never extracted
+                            "202405/real.jpg": "2024-07-15T10:00:00",  # real value
+                            "202405/sentinel.jpg": "2024-07-99T23:59:59",
+                        }
+                        for rel_path, taken_at in rows.items():
+                            await database.insert_photo(db, {
+                                "filepath": rel_path,
+                                "filename": os.path.basename(rel_path),
+                                "directory": "202405",
+                                "file_type": "JPG",
+                                "file_size": 100,
+                                "taken_at": taken_at,
+                            })
+
+                        # No files exist on disk at all. The directory name
+                        # still yields Year/Month, so re-derived rows land on
+                        # the month sentinel.
+                        backfilled = await database.backfill_missing_timestamps(
+                            db, photos_dir
+                        )
+
+                        got = {
+                            r[0]: r[1]
+                            for r in await db.execute_fetchall(
+                                "SELECT filepath, taken_at FROM photos"
+                            )
+                        }
+                        self.assertEqual(got["202405/none.jpg"], "2024-05-99T23:59:59")
+                        self.assertEqual(got["202405/sentinel.jpg"], "2024-05-99T23:59:59")
+                        # Real timestamps must survive even with the file
+                        # missing — the old whole-table backfill would have
+                        # stamped them with the current month.
+                        self.assertEqual(got["202405/real.jpg"], "2024-07-15T10:00:00")
+                        self.assertEqual(backfilled, 2)
+
+                        # Second run is a no-op: re-derived rows already sit
+                        # at their sentinel value, so nothing is rewritten.
+                        rows_again = await database.backfill_missing_timestamps(
+                            db, photos_dir
+                        )
+                        got_again = {
+                            r[0]: r[1]
+                            for r in await db.execute_fetchall(
+                                "SELECT filepath, taken_at FROM photos"
+                            )
+                        }
+                        self.assertEqual(got_again, got)
+                        self.assertEqual(rows_again, 0)
+                    finally:
+                        await db.close()
+                finally:
+                    database.DB_PATH = original_path
+
+        asyncio.run(run_test())
+
     def test_listing_query_prunes_heavy_columns(self):
         async def run_test():
             with tempfile.TemporaryDirectory() as temp_dir:
