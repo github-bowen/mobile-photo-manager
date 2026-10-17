@@ -3,8 +3,7 @@ import { t } from './i18n.js';
 import { $, formatDate, formatTime, formatFileSize, formatDuration } from './utils.js';
 import { requestNextPage } from './gallery.js';
 import { toggleFavorite } from './favorites.js';
-
-const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
+import { VIDEO_TYPES } from './constants.js';
 
 // Points at the play function of the currently displayed Live/Motion photo so
 // the slideshow can trigger playback programmatically (muted, to satisfy

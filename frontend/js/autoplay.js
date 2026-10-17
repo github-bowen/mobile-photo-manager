@@ -3,6 +3,7 @@ import { $, createEmptyState } from './utils.js';
 import { loadPhotos, requestNextPage, syncFilterUI } from './gallery.js';
 import { openModal, renderModalContent, playCurrentLive } from './modal.js';
 import { t } from './i18n.js';
+import { VIDEO_TYPES } from './constants.js';
 
 let autoplayTimer = null;
 export let isAutoplaying = false;
@@ -118,7 +119,7 @@ function openAutoplayConfig() {
   // Pre-fill type based on current active filter
   const isAll = state.activeFilter === "all";
   const photoTypes = ["HEIC", "HEIF", "JPG", "WEBP", "AVIF", "photos"];
-  const videoTypes = ["MOV", "MP4", "3GP", "videos"];
+  const videoTypes = [...VIDEO_TYPES, "videos"];
   $('autoplay-type-photo').checked = isAll || state.activeFilter === "photos" || photoTypes.some(type => state.activeFilter.includes(type));
   $('autoplay-type-video').checked = isAll || state.activeFilter === "videos" || videoTypes.some(type => state.activeFilter.includes(type));
   $('autoplay-type-screenshot').checked = isAll || state.activeFilter === "screenshots" || state.activeFilter.includes("PNG") || state.activeFilter === "PNG";
@@ -274,7 +275,7 @@ async function autoplayLoop() {
   const durationStr = durationModal ? durationModal.value : $('autoplay-duration').value;
   const durationMs = (parseInt(durationStr) || 3) * 1000;
   
-  let isVideoOrLive = ["MOV", "MP4", "3GP"].includes(photo.file_type) ||
+  let isVideoOrLive = VIDEO_TYPES.has(photo.file_type) ||
     photo.is_live_photo || photo.is_motion_photo;
   
   if (waitVideo && isVideoOrLive) {

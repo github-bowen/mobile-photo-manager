@@ -4,9 +4,9 @@ import { t } from './i18n.js';
 import { $, formatDateLabel, formatDuration, createEmptyState, setSwitchState, isUndeterminedDate } from './utils.js';
 import { openModal } from './modal.js';
 import { toggleFavorite } from './favorites.js';
+import { VIDEO_TYPES } from './constants.js';
 
 let galleryObserver = null;
-const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
 
 // O(1) photo lookups. The IntersectionObserver callback fires for every
 // card crossing the viewport edge, so a linear find() over state.photos
