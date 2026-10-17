@@ -439,6 +439,9 @@ select:focus-visible,
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
+  /* Prerequisites for the ::after ripple glow below. */
+  position: relative;
+  overflow: hidden;
 }
 
 .filter-btn:hover {
@@ -1768,10 +1771,6 @@ input[type="checkbox"] {
    =================================================================== */
 
 /* Filter Button Glow Micro-Animations */
-.filter-btn {
-  position: relative;
-  overflow: hidden;
-}
 .filter-btn::after {
   content: "";
   position: absolute;
