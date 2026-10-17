@@ -17,8 +17,8 @@ This is a lightweight, responsive web application for managing, organizing, and 
 A lightweight, local-first mobile photo gallery. It supports HEIC/HEIF, JPEG, PNG, WebP, AVIF, MOV, MP4, 3GP, iPhone Live Photos, and Android Motion Photos. Embedded Motion Photo video is streamed from the source file without creating a duplicate video.
 
 - **⭐ Interactive Photo Favoriting:** Toggle favorites seamlessly with one click on gallery cards or inside the modal lightbox. Includes real-time bidirectional syncing, a dedicated "⭐ Favorites" filter view, and smooth card exit animations when unfavoriting.
-- **Smart Categorization & Bilingual Search:** 5 semantic categories: All, Photos, Videos, Screenshots (with expanded resolution & iOS/Android EXIF/XMP screenshot detection), and ⭐ Favorites. Full bilingual fuzzy search supporting queries in both Chinese and English (e.g. "苏黎世" / "Zurich", "Delft", "北京").
-- **Seamless Modal Lightbox Navigation:** Full-screen glassmorphism viewer with navigation buttons, keyboard arrows, mouse wheel, and **mobile touch swipe gestures**. Automatically fetches the next page when reaching the end of loaded photos, with infinite wrap-around support.
+- **Smart Categorization & Bilingual Search:** 5 semantic categories: All, Photos, Videos, Screenshots (with expanded resolution & iOS/Android EXIF/XMP screenshot detection), and ⭐ Favorites. Free-text search matches filenames, descriptions, and locations — in Chinese or English (e.g. "苏黎世" / "Zurich", "Delft", "北京") — and a download button on every photo saves the original with its proper filename.
+- **Seamless Modal Lightbox Navigation:** Full-screen glassmorphism viewer with navigation buttons, keyboard arrows, mouse wheel, and **mobile touch swipe gestures**. Fully keyboard-accessible (Tab/Enter/Space/Esc) and fully functional on phones: favorite, download, and view-original actions live in a floating action bar, with EXIF details one ⓘ tap away in a slide-up drawer. Automatically fetches the next page when reaching the end of loaded photos, with infinite wrap-around support.
 - **Immersive Slideshow (Autoplay):** Sit back and enjoy your memories with a highly configurable slideshow. Filter by date, country, and media type, adjust playback speed, and choose whether to play full videos/Live Photos before advancing.
 - **Google Photos Takeout metadata:** Imports capture time, GPS, altitude, descriptions, and favorites from adjacent Takeout JSON sidecars, including supplemental-metadata and truncated sidecar filenames.
 - **Glassmorphism UI:** A premium, modern interface with smooth micro-animations and beautiful light/dark themes.
@@ -97,6 +97,10 @@ Key configuration options (`.env`):
 | `LOAD_ORIGINAL_ON_CLICK`| `False` | Auto-load 4K high-res image when opening a single photo |
 | `DB_PATH` | `data/photos.db` | SQLite database path |
 | `THUMBNAIL_DIR` | `data/thumbnails` | Directory for caching thumbnails |
+| `THUMBNAIL_WORKERS` | `3` | Concurrent thumbnail/HEIC-render workers (each decodes a full image; lower it if memory is tight) |
+| `HTTP_CACHE_MAX_AGE` | `86400` | Browser cache lifetime (seconds) for photos, thumbnails, and renders |
+| `TRANSLATION_FLUSH_DEBOUNCE` | `5` | Seconds to debounce translation-cache writes |
+| `TRANSLATE_MAX_ITEMS` | `300` | Above this many distinct place names, `/api/locations` skips translation and serves raw names |
 
 #### 3. Import Photos
 
@@ -143,7 +147,15 @@ If running in the background:
 ### 📖 User Guide
 - **Browsing**: Scroll down to load more. Daily headers display your trajectory.
 - **Timeline**: Click a month in the sidebar to filter. Click the arrow to expand and filter by a specific day.
-- **Locations**: Click a country in the sidebar to view all photos from that country, or expand to select a specific city. The search bar supports bilingual fuzzy searching.
+- **Locations**: Click a country in the sidebar to view all photos from that country, or expand to select a specific city.
+- **Search**: Type in the search bar to match filenames, descriptions, or locations in either language. Searching clears any location filter (and vice versa) so the active filter is always unambiguous.
 - **High-Res Viewing**: Click a photo to open the modal. Use arrow keys, mouse wheel, on-screen glassmorphism buttons, or **mobile touch swipe** to navigate. Navigation automatically loads subsequent pages when reaching the end. If `LOAD_ORIGINAL_ON_CLICK` is false, click "View Original File" to render and cache the full-quality image.
 - **Favorites**: Click the star icon on any card or inside the modal to favorite photos; click "⭐ Favorites" in the header to view your starred collection.
 - **Slideshow**: Click the "Slideshow / 幻灯片" button in the top bar to configure and start an automated presentation of your photos and videos. You can also start the slideshow directly from any individual photo's detail view using the inline toggle.
+
+### ⚙️ How It Works Under the Hood
+
+- **Incremental scanning with change detection**: Each file's nanosecond mtime is stored in the database. A scan re-reads only files that are new, deleted, or whose mtime changed (replaced files get their metadata rescanned, thumbnails regenerated, and render caches invalidated). Google Takeout sidecars are tracked the same way, so adding or editing a sidecar is picked up without touching other files.
+- **WAL mode**: The SQLite database runs in write-ahead logging, so browsing stays responsive while a scan commits batches. This creates `photos.db-wal` / `photos.db-shm` sidecar files — that is normal. When backing up, prefer `sqlite3 photos.db ".backup backup.db"` over copying the file mid-write.
+- **One-time data migrations**: Content rewrites (e.g. normalizing the stored spelling of geocoded city names) are gated by SQLite's `PRAGMA user_version` and run exactly once, on the first boot after upgrading.
+- **Browser caching**: Photos, thumbnails, and renders are served with ETags and revalidation, and the HTML pins its CSS/JS to content hashes — so unchanged assets are served from cache (304) and changed ones get a fresh URL. After deploying an upgrade, the first page load refetches static assets once; that is expected.
