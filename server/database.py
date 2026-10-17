@@ -80,6 +80,44 @@ MIGRATIONS = {
     "file_mtime_ns": "INTEGER",
 }
 
+# Indexes created for the listing queries: the sort key and the Live-Photo
+# MOV-pairing probe. CREATE INDEX IF NOT EXISTS keeps these idempotent.
+INDEX_MIGRATIONS = [
+    "CREATE INDEX IF NOT EXISTS idx_taken_at_filename ON photos(taken_at, filename)",
+    "CREATE INDEX IF NOT EXISTS idx_live_photo_mov ON photos(live_photo_mov)",
+]
+
+
+def _photo_columns_from_schema() -> list[str]:
+    """Column names declared in SCHEMA's CREATE TABLE body, in order.
+
+    Lines inside the table body are indented; table-level statements are not.
+    """
+    return [
+        line.strip().split()[0]
+        for line in SCHEMA.splitlines()
+        if line.startswith("    ") and line.strip()
+    ]
+
+
+# Listing queries never need the takeout sidecar blob (a large JSON string
+# per row), its mtime, the edit-lineage pointer, or the created_at bookkeeping
+# timestamp — detail queries keep SELECT *.
+_PHOTO_LIST_EXCLUDE = {
+    "takeout_sidecar",
+    "takeout_sidecar_mtime_ns",
+    "original_file",
+    "created_at",
+}
+
+
+def _photo_list_columns() -> str:
+    ordered = []
+    for column in _photo_columns_from_schema() + list(MIGRATIONS):
+        if column not in ordered and column not in _PHOTO_LIST_EXCLUDE:
+            ordered.append(column)
+    return ", ".join(ordered)
+
 
 async def init_db():
     """Initialize the database and create tables if needed."""
@@ -96,6 +134,8 @@ async def init_db():
         for name, definition in MIGRATIONS.items():
             if name not in columns:
                 await db.execute(f"ALTER TABLE photos ADD COLUMN {name} {definition}")
+        for statement in INDEX_MIGRATIONS:
+            await db.execute(statement)
         await db.commit()
 
 
@@ -205,10 +245,10 @@ async def delete_photo_by_filepath(db: aiosqlite.Connection, filepath: str):
     await db.execute("DELETE FROM photos WHERE filepath = ?", (filepath,))
     await db.commit()
 
-async def get_photos(
-    db: aiosqlite.Connection,
-    page: int = 1,
-    per_page: int = 50,
+PHOTO_LIST_COLUMNS = _photo_list_columns()
+
+
+def build_photo_filters(
     file_type: Optional[str] = None,
     location_name: Optional[Union[str, list[str]]] = None,
     city: Optional[str] = None,
@@ -217,10 +257,13 @@ async def get_photos(
     date_to: Optional[str] = None,
     is_screenshot: Optional[bool] = None,
     is_favorite: Optional[bool] = None,
-    sort_order: str = "desc",
     category: Optional[str] = None,
-) -> tuple[list[dict], int]:
-    """Get paginated photos with optional filters. Returns (photos, total_count)."""
+) -> tuple[str, list]:
+    """Build the shared WHERE clause for photo listing queries.
+
+    Returned as (where_sql, params) so count and page queries — and any
+    other listing endpoint — agree exactly on the filter semantics.
+    """
     conditions = ["file_type != 'AAE'"]
     params = []
 
@@ -230,11 +273,11 @@ async def get_photos(
 
     # Exclude Live-Photo MOV sidecar files from the grid;
     # they are played inline when the paired HEIC is hovered.
+    # EXISTS turns the pairing probe into an index lookup on
+    # idx_live_photo_mov instead of a join over all MOV rows.
     conditions.append(
-        "NOT (file_type = 'MOV' AND id IN "
-        "(SELECT p2.id FROM photos p2 "
-        " INNER JOIN photos p3 ON p3.live_photo_mov = p2.filepath "
-        " WHERE p2.file_type = 'MOV'))"
+        "NOT (file_type = 'MOV' AND EXISTS ("
+        "SELECT 1 FROM photos p3 WHERE p3.live_photo_mov = photos.filepath))"
     )
 
     if category:
@@ -332,7 +375,36 @@ async def get_photos(
         conditions.append("is_favorite = ?")
         params.append(1 if is_favorite else 0)
 
-    where = " AND ".join(conditions)
+    return " AND ".join(conditions), params
+
+
+async def get_photos(
+    db: aiosqlite.Connection,
+    page: int = 1,
+    per_page: int = 50,
+    file_type: Optional[str] = None,
+    location_name: Optional[Union[str, list[str]]] = None,
+    city: Optional[str] = None,
+    country: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    is_screenshot: Optional[bool] = None,
+    is_favorite: Optional[bool] = None,
+    sort_order: str = "desc",
+    category: Optional[str] = None,
+) -> tuple[list[dict], int]:
+    """Get paginated photos with optional filters. Returns (photos, total_count)."""
+    where, params = build_photo_filters(
+        file_type=file_type,
+        location_name=location_name,
+        city=city,
+        country=country,
+        date_from=date_from,
+        date_to=date_to,
+        is_screenshot=is_screenshot,
+        is_favorite=is_favorite,
+        category=category,
+    )
 
     # Get total count
     count_row = await db.execute_fetchall(
@@ -344,7 +416,8 @@ async def get_photos(
     offset = (page - 1) * per_page
     order_dir = "ASC" if sort_order.lower() == "asc" else "DESC"
     rows = await db.execute_fetchall(
-        f"SELECT * FROM photos WHERE {where} ORDER BY taken_at {order_dir}, filename {order_dir} LIMIT ? OFFSET ?",
+        f"SELECT {PHOTO_LIST_COLUMNS} FROM photos WHERE {where} "
+        f"ORDER BY taken_at {order_dir}, filename {order_dir} LIMIT ? OFFSET ?",
         params + [per_page, offset],
     )
 
