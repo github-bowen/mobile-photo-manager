@@ -1478,23 +1478,6 @@ select:focus-visible,
 }
 
 .autoplay-modal-content {
-  background: var(--bg-primary);
-  padding: 24px;
-  border-radius: 16px;
-  width: 420px;
-  max-width: 90vw;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-  border: 1px solid var(--border-subtle);
-  transform: scale(0.95);
-  transition: transform 0.2s ease;
-}
-
-.autoplay-modal-overlay.active .autoplay-modal-content {
-  transform: scale(1);
-}
-
-/* Autoplay Config UI Overrides */
-.autoplay-modal-content {
   background: var(--bg-secondary);
   padding: 32px;
   border-radius: 24px;
@@ -1508,6 +1491,11 @@ select:focus-visible,
   flex-direction: column;
   gap: 20px;
 }
+
+.autoplay-modal-overlay.active .autoplay-modal-content {
+  transform: scale(1);
+}
+
 .autoplay-modal-title {
   margin: 0;
   color: var(--text-primary);
