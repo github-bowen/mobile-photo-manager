@@ -868,25 +868,137 @@ def _is_iso_video_at(filepath: str, offset: int, length: int) -> bool:
         return False
 
 
+def _iter_file_chunks(file, start: int, end: int, chunk_size: int, overlap: int):
+    """Yield (abs_offset, data) covering [start, end) in bounded chunks.
+
+    Each read is head-extended by `overlap` bytes into the previous chunk,
+    so a token straddling a chunk boundary always appears whole in one
+    read. Peak memory stays at chunk_size + overlap regardless of file
+    size. For any search token of length L, overlap >= L - 1 makes
+    boundary straddles impossible to miss.
+    """
+    pos = start
+    while pos < end:
+        read_start = max(start, pos - overlap)
+        file.seek(read_start)
+        data = file.read(min(end, pos + chunk_size) - read_start)
+        yield read_start, data
+        pos += chunk_size
+
+
+def _iter_file_chunks_backward(file, start: int, end: int, chunk_size: int, overlap: int):
+    """Yield (abs_offset, data) covering [start, end) from the end backward.
+
+    Same head-extension guarantee as _iter_file_chunks; the yielded data
+    runs up to the previous chunk's start, so scanning stops as soon as a
+    "closest to the end" token is found.
+    """
+    pos = end
+    while pos > start:
+        chunk_start = max(start, pos - chunk_size)
+        read_start = max(start, chunk_start - overlap)
+        file.seek(read_start)
+        data = file.read(pos - read_start)
+        yield read_start, data
+        pos = chunk_start
+
+
+def _find_token_in_range(file, token: bytes, start: int, end: int,
+                         chunk_size: int = 256 * 1024) -> int:
+    """First absolute offset of token within [start, end); -1 if absent.
+
+    A hit inside a chunk's head-extension was already searched by the
+    previous chunk (and found empty), so the first hit reported is the
+    true first hit in the range.
+    """
+    overlap = len(token) + 8  # straddle margin for the token itself
+    for read_start, data in _iter_file_chunks(file, start, end, chunk_size, overlap):
+        idx = data.find(token)
+        if idx >= 0:
+            return read_start + idx
+    return -1
+
+
+def _find_pattern_in_range(file, pattern, start: int, end: int,
+                           chunk_size: int = 256 * 1024):
+    """First regex match within [start, end), or None.
+
+    The overlap must cover the longest possible match (13 bytes for the
+    ISO 6709 GPS pattern); 64 is used for margin.
+    """
+    for read_start, data in _iter_file_chunks(file, start, end, chunk_size, 64):
+        match = pattern.search(data)
+        if match:
+            return match
+    return None
+
+
 def _find_embedded_video_after_marker(filepath: str, file_size: int) -> Optional[tuple[int, int]]:
-    """Locate legacy Samsung MotionPhoto_Data payloads near the end of a JPEG."""
-    tail_size = min(file_size, 64 * 1024 * 1024)
+    """Locate legacy Samsung MotionPhoto_Data payloads near the end of a JPEG.
+
+    Same last-64MB window and matching rules as before, but walked
+    backward in 1MB chunks instead of one read: a multi-GB motion photo
+    no longer allocates its entire tail just to find a 16-byte marker.
+    """
+    window_size = min(file_size, 64 * 1024 * 1024)
+    window_start = file_size - window_size
+    marker = b"MotionPhoto_Data"
+
+    marker_abs = -1
+    ftyp_abs = -1
     try:
         with open(filepath, "rb") as file:
-            file.seek(file_size - tail_size)
-            tail = file.read(tail_size)
+            # Backward walk: the first chunk holding a marker holds the
+            # LAST marker in the window (what tail.rfind used to find),
+            # because every chunk closer to the end was already empty.
+            for read_start, data in _iter_file_chunks_backward(
+                file, window_start, file_size, 1024 * 1024, 64
+            ):
+                idx = data.rfind(marker)
+                if idx >= 0:
+                    marker_abs = read_start + idx
+                    break
+
+            if marker_abs >= 0:
+                ftyp_abs = _find_token_in_range(
+                    file, b"ftyp", marker_abs + len(marker), file_size
+                )
+            else:
+                # Legacy fallback (no exact marker): accept the first video
+                # start in the window, but only if "MotionPhoto" appears
+                # before it — mirroring the old tail[:ftyp_pos] check.
+                ftyp_abs = _find_first_ftyp_after_motionphoto(
+                    file, window_start, file_size
+                )
     except OSError:
         return None
 
-    marker_pos = tail.rfind(b"MotionPhoto_Data")
-    search_start = marker_pos + len(b"MotionPhoto_Data") if marker_pos >= 0 else 0
-    ftyp_pos = tail.find(b"ftyp", search_start)
-    if ftyp_pos < 4 or (marker_pos < 0 and b"MotionPhoto" not in tail[:ftyp_pos]):
+    offset = ftyp_abs - 4 if ftyp_abs >= 0 else -1
+    if offset < window_start:
+        # The video box (and its 4-byte size field) must start inside the
+        # search window.
         return None
-
-    offset = file_size - tail_size + ftyp_pos - 4
     length = file_size - offset
     return (offset, length) if _is_iso_video_at(filepath, offset, length) else None
+
+
+def _find_first_ftyp_after_motionphoto(file, start: int, end: int) -> int:
+    """First 'ftyp' in [start, end) that 'MotionPhoto' precedes; -1 otherwise.
+
+    Used only when the exact b"MotionPhoto_Data" marker is absent: the
+    first video start is accepted when any b"MotionPhoto" string appears
+    before it in the window.
+    """
+    ftyp = b"ftyp"
+    seen_motionphoto = False
+    for read_start, data in _iter_file_chunks(file, start, end, 256 * 1024, 64):
+        idx = data.find(ftyp)
+        if idx >= 0:
+            if seen_motionphoto or b"MotionPhoto" in data[:idx]:
+                return read_start + idx
+            return -1
+        seen_motionphoto = seen_motionphoto or b"MotionPhoto" in data
+    return -1
 
 
 def extract_motion_photo_metadata(filepath: str) -> dict:
@@ -1115,36 +1227,50 @@ def _parse_gps_from_raw(
     return None
 
 
+# ISO 6709 GPS coordinates as embedded by most phone cameras, e.g. +47.3769+008.5416.
+_GPS_PATTERN = re.compile(rb'([+-]\d{2,4}\.\d{2,6})([+-]\d{2,4}\.\d{2,6})')
+
+
 def extract_video_metadata(filepath: str) -> dict:
     """Extract creation time, GPS, duration and dimensions from ISO video files."""
     meta = {}
     try:
         file_size = os.path.getsize(filepath)
-        tail_bytes = min(1024 * 1024, file_size)
+        head_limit = min(file_size, 5 * 1024 * 1024)
 
         with open(filepath, "rb") as f:
-            # Read first and last parts of the file to find ISO 6709 GPS
-            head_data = f.read(min(file_size, 5 * 1024 * 1024))
-            import re
-            match = re.search(rb'([+-]\d{2,4}\.\d{2,6})([+-]\d{2,4}\.\d{2,6})', head_data)
-            if not match and file_size > 5 * 1024 * 1024:
-                f.seek(max(0, file_size - 1 * 1024 * 1024))
-                gps_data = head_data + f.read()
-                match = re.search(rb'([+-]\d{2,4}\.\d{2,6})([+-]\d{2,4}\.\d{2,6})', gps_data)
-            
+            # GPS usually sits near the start of the file; walk the head in
+            # bounded chunks instead of one 5MB read.
+            match = _find_pattern_in_range(f, _GPS_PATTERN, 0, head_limit)
+            if match is None and file_size > head_limit:
+                tail_start = file_size - min(1024 * 1024, file_size)
+                # 64 bytes of margin reproduce the old head+tail
+                # concatenated search across the head/tail junction.
+                match = _find_pattern_in_range(
+                    f, _GPS_PATTERN, max(0, tail_start - 64), file_size
+                )
+
             if match:
                 meta["latitude"] = float(match.group(1))
                 meta["longitude"] = float(match.group(2))
 
-            # Keep reading for duration in moov atom
-            f.seek(max(0, file_size - tail_bytes))
-            tail_data = f.read()
+            # Duration and dimensions live in the moov atom — search the
+            # head first, then the last 1MB, without holding either whole.
+            moov_abs = _find_token_in_range(f, b"moov", 0, head_limit)
+            if moov_abs < 0 and file_size > head_limit:
+                tail_start = file_size - min(1024 * 1024, file_size)
+                # 3 bytes of margin catch a moov token straddling the
+                # head/tail junction, as the old concatenation did.
+                moov_abs = _find_token_in_range(
+                    f, b"moov", max(0, tail_start - 3), file_size
+                )
 
-        data = head_data if file_size <= len(head_data) else head_data + tail_data
-
-        moov_idx = data.find(b"moov")
-        if moov_idx >= 4:
-            moov_data = data[moov_idx - 4 :]
+        if moov_abs >= 4:
+            # mvhd/tkhd sit right at the start of moov; a 1MB window from
+            # the atom's size field is far more than any real moov needs.
+            with open(filepath, "rb") as f:
+                f.seek(moov_abs - 4)
+                moov_data = f.read(1024 * 1024)
 
             # Find mvhd atom
             mvhd_idx = moov_data.find(b"mvhd")
