@@ -3,23 +3,47 @@ import { t } from './i18n.js';
 
 export const $ = (id) => document.getElementById(id);
 
+// The database marks "no real capture date" with sentinel strings. Two
+// generations exist: the current "-99"/"-00" month/day markers, and the
+// oldest rows frozen at "…-01T12:00:00" — indistinguishable from a real
+// photo taken at noon on the 1st, but the scanner never produced that
+// shape for a genuine date. One shared guard keeps every formatter
+// reacting to the same set, so old noon-frozen rows stop rendering as a
+// real "January 1st, 12:00:00" and show as undetermined instead.
+const UNDETERMINED_MARKERS = ["-99", "-00", "-01T12:00:00"];
+
+export function isUndeterminedDate(iso) {
+  if (!iso) return true;
+  return UNDETERMINED_MARKERS.some(m => iso.includes(m));
+}
+
+const MONTH_NAMES_EN = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+// Label for a sentinel row: keep the parts that are real (the year, and
+// the month when it is an actual month — the noon-frozen generation
+// kept a real month) and mark the day undetermined. The -99/-00 markers
+// carry no real month, so those render as year-only.
+function undeterminedDateLabel(iso) {
+  const parts = iso.split("T")[0].split("-");
+  const year = parts[0];
+  const month = parseInt(parts[1], 10);
+  const realMonth = month >= 1 && month <= 12;
+  if (state.language === "zh") {
+    return realMonth ? `${year}年${month}月未确定日期` : `${year}年未确定日期`;
+  }
+  return realMonth
+    ? `${MONTH_NAMES_EN[month - 1]} ${year} (Undetermined Date)`
+    : `${year} (Undetermined Date)`;
+}
+
 export function formatDateLabel(dateStr) {
   if (!dateStr || dateStr === "Unknown Date" || dateStr === t("unknown_date")) return t("unknown_date");
-  if (dateStr.endsWith("-99") || dateStr.includes("-99") || dateStr.endsWith("-00") || dateStr.includes("-00")) {
-    const parts = dateStr.split("T")[0].split("-");
-    const year = parts[0];
-    const month = parseInt(parts[1], 10);
-    const monthFormatted = month < 10 ? '0' + month : month;
-    if (state.language === "zh") {
-      return `${year}年${monthFormatted}月未确定日期`;
-    } else {
-      const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-      const monthName = monthNames[month - 1] || `${month}`;
-      return `${monthName} ${year} (Undetermined Date)`;
-    }
-  }
+  if (isUndeterminedDate(dateStr)) return undeterminedDateLabel(dateStr);
   try {
-    const d = new Date(dateStr + "T12:00:00");
+    // Callers normally pass date-only strings; strip any time part so a
+    // full ISO value doesn't become "…T14:03:02T12:00:00" -> Invalid Date.
+    const d = new Date(dateStr.split("T")[0] + "T12:00:00");
     return d.toLocaleDateString(state.language === "zh" ? "zh-CN" : "en-US", {
       year: "numeric", month: "long", day: "numeric", weekday: "long"
     });
@@ -39,19 +63,7 @@ export function formatMonthLabel(monthStr) {
 
 export function formatDate(isoStr) {
   if (!isoStr) return "—";
-  if (isoStr.includes("-99") || isoStr.includes("-00")) {
-    const parts = isoStr.split("T")[0].split("-");
-    const year = parts[0];
-    const month = parseInt(parts[1], 10);
-    const monthFormatted = month < 10 ? '0' + month : month;
-    if (state.language === "zh") {
-      return `${year}年${monthFormatted}月未确定日期`;
-    } else {
-      const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-      const monthName = monthNames[month - 1] || `${month}`;
-      return `${monthName} ${year} (Undetermined Date)`;
-    }
-  }
+  if (isUndeterminedDate(isoStr)) return undeterminedDateLabel(isoStr);
   try {
     const d = new Date(isoStr);
     return d.toLocaleDateString(state.language === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", day: "numeric" });
@@ -61,7 +73,7 @@ export function formatDate(isoStr) {
 }
 
 export function formatTime(isoStr) {
-  if (!isoStr || isoStr.includes("-99") || isoStr.includes("-00")) return "—";
+  if (isUndeterminedDate(isoStr)) return "—";
   try {
     const d = new Date(isoStr);
     return d.toLocaleTimeString(state.language === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });

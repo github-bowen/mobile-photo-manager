@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { $, formatDateLabel, formatDuration, createEmptyState, setSwitchState } from './utils.js';
+import { $, formatDateLabel, formatDuration, createEmptyState, setSwitchState, isUndeterminedDate } from './utils.js';
 import { openModal } from './modal.js';
 import { toggleFavorite } from './favorites.js';
 
@@ -291,7 +291,19 @@ function createPhotoCard(photo) {
 function groupByDate(photos) {
   const groups = {};
   for (const photo of photos) {
-    const date = photo.taken_at ? photo.taken_at.split("T")[0] : t("unknown_date");
+    // Sentinel rows (no real capture date) keep their FULL taken_at as the
+    // group key: the date part alone ("2005-01-01") would hide the
+    // "…T12:00:00" marker that formatDateLabel needs to tell a noon-frozen
+    // sentinel apart from a genuinely New Year's Day photo, and the two
+    // shapes can never collide — real keys have no time component.
+    let date;
+    if (!photo.taken_at) {
+      date = t("unknown_date");
+    } else if (isUndeterminedDate(photo.taken_at)) {
+      date = photo.taken_at;
+    } else {
+      date = photo.taken_at.split("T")[0];
+    }
     if (!groups[date]) {
       groups[date] = [];
     }
