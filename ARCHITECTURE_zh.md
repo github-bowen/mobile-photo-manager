@@ -2,7 +2,7 @@
 
 *其他语言版本: [English](ARCHITECTURE.md), [中文](ARCHITECTURE_zh.md).*
 
-本文档详细说明 iPhone Photo Manager 的技术架构、数据流、各模块设计原理以及关键实现细节。
+本文档详细说明手机照片管理（Mobile Photo Manager）的技术架构、数据流、各模块设计原理以及关键实现细节。
 
 ### 1. 总体架构
 

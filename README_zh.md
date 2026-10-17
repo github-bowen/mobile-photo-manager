@@ -1,4 +1,4 @@
-# iPhone Photo Manager
+# Mobile Photo Manager
 
 *其他语言版本: [English](README.md), [中文](README_zh.md).*
 
@@ -28,7 +28,7 @@
 **预期的目录结构：**
 
 ```text
-iphone-photo-manager/
+mobile-photo-manager/
 ├── photos/                  # 你的 PHOTOS_DIR 照片目录（在 .env 中配置）
 │   ├── 202601/              # （可选）按年月划分子文件夹
 │   │   ├── IMG_0001.HEIC
@@ -67,7 +67,7 @@ iphone-photo-manager/
 ```bash
 # 克隆项目
 git clone <repo-url>
-cd iphone-photo-manager
+cd mobile-photo-manager
 
 # 创建虚拟环境并安装依赖
 uv venv --python 3.10
@@ -103,12 +103,12 @@ copy .env.template .env
 | `TRANSLATE_MAX_ITEMS` | `300` | 地点翻译条数超过该值时 `/api/locations` 直接返回原文 |
 
 #### 3. 导入照片
-将 iPhone 照片按年月分子文件夹放入 `photos/` 目录。（支持用 AirDrop 或 USB 直接导出，系统会自动配对 Live Photo）。
+将 iPhone 或安卓手机的照片按年月分子文件夹放入 `photos/` 目录。（iPhone 支持 AirDrop 或 USB 直接导出，系统会自动配对 Live Photo；安卓手机复制相机目录即可）。
 
 导入 Google Photos Takeout 时，请把所有压缩分卷解压到同一目录树，并将 `PHOTOS_DIR` 指向解压后的 `Takeout/Google Photos`（也可以把该目录复制到 `photos/` 下）。请保留媒体文件与对应 `.json` 或 `.supplemental-metadata.json` 文件的相邻结构。JSON 不会出现在相册中，其中的拍摄时间、GPS、海拔、描述和收藏状态会自动应用；新增、替换或删除 sidecar 后，下次增量扫描会刷新对应媒体。
 
 #### 4. 启动服务
-请确保你当前位于项目根目录（例如 `iPhone-Photo-Manager`）下，然后执行：
+请确保你当前位于项目根目录（例如 `Mobile-Photo-Manager`）下，然后执行：
 ```bash
 # 方式一：直接运行
 uv run --no-project python -m server.app

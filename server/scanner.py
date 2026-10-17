@@ -1,5 +1,5 @@
 """
-File scanner module for the iPhone Photo Manager.
+File scanner module for the Mobile Photo Manager.
 Scans photos directory, extracts EXIF metadata from HEIC/JPG/PNG files,
 and parses MOV metadata.
 """

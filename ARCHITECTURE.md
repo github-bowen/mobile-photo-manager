@@ -2,7 +2,7 @@
 
 *Read this in other languages: [English](ARCHITECTURE.md), [中文](ARCHITECTURE_zh.md).*
 
-This document explains the technical architecture, data flows, module design, and key implementation details of the iPhone Photo Manager.
+This document explains the technical architecture, data flows, module design, and key implementation details of the Mobile Photo Manager.
 
 ### 1. Overall Architecture
 

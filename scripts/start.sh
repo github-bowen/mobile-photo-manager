@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start iPhone Photo Manager server
+# Start Mobile Photo Manager server
 
 cd "$(dirname "$0")/.."
 

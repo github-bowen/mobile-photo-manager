@@ -1,5 +1,5 @@
 """
-Geocoder module for the iPhone Photo Manager.
+Geocoder module for the Mobile Photo Manager.
 Offline reverse geocoding via reverse_geocoder, with per-batch coordinate
 deduplication; coordinates inside China fall back to BigDataCloud so the
 location comes back in Chinese.

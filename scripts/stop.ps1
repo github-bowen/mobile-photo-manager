@@ -1,4 +1,4 @@
-Write-Host "Stopping iPhone Photo Manager services..."
+Write-Host "Stopping Mobile Photo Manager services..."
 
 Write-Host "Freeing port 8000..."
 $connections = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue

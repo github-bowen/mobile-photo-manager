@@ -1,4 +1,4 @@
-# iPhone Photo Manager
+# Mobile Photo Manager
 
 *Read this in other languages: [English](README.md), [中文](README_zh.md).*
 
@@ -28,7 +28,7 @@ To use it, export your iPhone or Android media and copy it into your configured 
 **Expected Directory Structure:**
 
 ```text
-iphone-photo-manager/
+mobile-photo-manager/
 ├── photos/                  # Your PHOTOS_DIR (configured in .env)
 │   ├── 202601/              # (Optional) Group by year/month
 │   │   ├── IMG_0001.HEIC
@@ -67,7 +67,7 @@ Python 3.10+ and [uv](https://docs.astral.sh/uv/getting-started/installation/) a
 ```bash
 # Clone the repository
 git clone <repo-url>
-cd iphone-photo-manager
+cd mobile-photo-manager
 
 # Create a virtual environment and install dependencies
 uv venv --python 3.10
@@ -104,14 +104,14 @@ Key configuration options (`.env`):
 
 #### 3. Import Photos
 
-Place your iPhone photos into the `photos/` directory, ideally grouped by year/month subfolders.
+Place your iPhone or Android photos into the `photos/` directory, ideally grouped by year/month subfolders.
 *(Hint: You can use AirDrop or USB to export directly. The system automatically pairs `.HEIC` and `.MOV` files for Live Photos).*
 
 For a Google Photos Takeout export, extract all archive parts into the same directory tree and set `PHOTOS_DIR` to the extracted `Takeout/Google Photos` directory (or copy that directory under `photos/`). Keep each media file beside its `.json` or `.supplemental-metadata.json` file. The JSON files are not shown as media; their capture time, GPS, altitude, description, and favorite state are applied automatically. Adding, replacing, or removing a sidecar is detected by the next incremental scan.
 
 #### 4. Start the Server
 
-Ensure you are in the project root directory (e.g. `iPhone-Photo-Manager`), then run:
+Ensure you are in the project root directory (e.g. `Mobile-Photo-Manager`), then run:
 
 ```bash
 # Option 1: Direct command

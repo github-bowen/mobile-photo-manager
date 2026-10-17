@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Stopping iPhone Photo Manager services..."
+echo "Stopping Mobile Photo Manager services..."
 
 # Kill any process listening on the backend port 8000
 echo "Freeing port 8000..."

@@ -1,5 +1,5 @@
 """
-iPhone Photo Manager — FastAPI Application
+Mobile Photo Manager — FastAPI Application
 Main server that provides API endpoints for photo browsing, searching,
 and thumbnail serving.
 """
@@ -378,7 +378,7 @@ async def lifespan(app: FastAPI):
     await _translations.flush()
 
 
-app = FastAPI(title="iPhone Photo Manager", lifespan=lifespan)
+app = FastAPI(title="Mobile Photo Manager", lifespan=lifespan)
 app.add_middleware(SecurityHeadersMiddleware)
 
 

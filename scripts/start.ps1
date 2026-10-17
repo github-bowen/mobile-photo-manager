@@ -1,4 +1,4 @@
-# Start iPhone Photo Manager server on Windows
+# Start Mobile Photo Manager server on Windows
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location "$ScriptDir\.."
 

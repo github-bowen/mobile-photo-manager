@@ -2,7 +2,7 @@ import { state } from './state.js';
 
 export const i18n = {
   en: {
-    app_title: "iPhone Photo Manager",
+    app_title: "Mobile Photo Manager",
     timeline: "Timeline",
     locations: "Locations",
     load_original: "Load 4K Original",
@@ -97,7 +97,7 @@ export const i18n = {
     no_photos_criteria: "No photos match the selected criteria. Adjust the slideshow configuration and try again."
   },
   zh: {
-    app_title: "iPhone 照片管理",
+    app_title: "手机照片管理",
     timeline: "时间线",
     locations: "地点",
     load_original: "加载 4K 原图",

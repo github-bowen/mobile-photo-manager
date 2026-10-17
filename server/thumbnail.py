@@ -1,5 +1,5 @@
 """
-Thumbnail generation module for the iPhone Photo Manager.
+Thumbnail generation module for the Mobile Photo Manager.
 Generates WebP thumbnails at two sizes: small (200px) and medium (800px).
 """
 

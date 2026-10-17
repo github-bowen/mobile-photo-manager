@@ -1,5 +1,5 @@
 """
-Database module for the iPhone Photo Manager.
+Database module for the Mobile Photo Manager.
 Manages SQLite database for photo metadata storage and retrieval.
 """
 
