@@ -83,7 +83,7 @@ async function checkScanStatus() {
         if (loadingOverlay) loadingOverlay.classList.add("hidden");
       }
 
-      setTimeout(checkScanStatus, 2000);
+      setTimeout(checkScanStatus, 3000);
     }
   } catch (e) {
     setTimeout(checkScanStatus, 5000);
