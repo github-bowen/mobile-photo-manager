@@ -1626,7 +1626,7 @@ select:focus-visible,
 }
 
 /* Autoplay Select styling */
-.autoplay-select, .mat-select {
+.autoplay-select {
   padding: 6px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
@@ -1639,9 +1639,6 @@ select:focus-visible,
 .autoplay-select {
   width: 100%;
   margin-top: 5px;
-}
-.mat-select {
-  flex: 0 0 auto;
 }
 
 /* Segmented Control for Autoplay Config */
@@ -1724,9 +1721,12 @@ input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
 }
 
-/* Glassmorphism Select */
+/* Glassmorphism Select - the single .mat-select definition (the old
+   shared .autoplay-select rule set only properties this block
+   overrides or repeats; sizing lives here since the strip layout). */
 .mat-select {
   appearance: none;
+  flex: 0 0 auto;
   background: var(--bg-glass);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
