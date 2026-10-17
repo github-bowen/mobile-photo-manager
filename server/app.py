@@ -123,6 +123,32 @@ scan_state = {
     "message": "",
 }
 
+# Handle to the running scan task. scan_state above is only set to
+# "scanning" once the coroutine body actually starts executing — after
+# create_task() returns — so this handle is what closes the race between
+# two rapid POST /api/scan/start calls.
+_scan_task: Optional[asyncio.Task] = None
+
+# Serializes HEIC render-cache generation so two concurrent first-requests
+# can't render the same photo twice (or serve a partially written JPEG).
+_render_lock = asyncio.Lock()
+
+
+def _scan_in_progress() -> bool:
+    return (
+        scan_state["status"] in ("scanning", "generating_thumbnails", "geocoding")
+        or (_scan_task is not None and not _scan_task.done())
+    )
+
+
+def _start_scan() -> bool:
+    """Create the scan task exactly once. False if a scan is already running."""
+    global _scan_task
+    if _scan_in_progress():
+        return False
+    _scan_task = asyncio.create_task(_run_full_scan())
+    return True
+
 
 # --- Security Middleware ---
 
@@ -162,13 +188,17 @@ async def lifespan(app: FastAPI):
 
     if count == 0:
         logger.info("No photos in database. Starting initial scan...")
-        asyncio.create_task(_run_full_scan())
+        _start_scan()
     elif SCAN_ON_STARTUP:
         logger.info("SCAN_ON_STARTUP enabled. Updating index...")
-        asyncio.create_task(_run_full_scan())
+        _start_scan()
     else:
         logger.info("Database has %d photos. Skipping initial scan.", count)
-        # Still check for pending thumbnails and geocoding
+        # Still check for pending thumbnails and geocoding. Mark the state
+        # synchronously here — create_task defers the coroutine body, so the
+        # flag inside _process_pending_tasks alone leaves a startup window
+        # where /api/scan/start could launch a second, overlapping task.
+        scan_state["status"] = "generating_thumbnails"
         asyncio.create_task(_process_pending_tasks())
 
     yield
@@ -268,6 +298,12 @@ async def _run_full_scan():
 
 async def _process_pending_tasks():
     """Process any pending thumbnails and geocoding."""
+    global scan_state
+    # Set synchronously at entry: this function is spawned via create_task,
+    # so callers must not depend on the body having started yet.
+    scan_state["status"] = "generating_thumbnails"
+    scan_state["message"] = "Processing pending tasks..."
+
     db = await get_db()
     backfilled = await backfill_missing_timestamps(db, PHOTOS_DIR)
     if backfilled > 0:
@@ -276,7 +312,6 @@ async def _process_pending_tasks():
 
     await _generate_all_thumbnails()
     await _geocode_all_photos()
-    global scan_state
     scan_state["status"] = "idle"
     scan_state["message"] = ""
 
@@ -585,18 +620,26 @@ async def api_get_photo_render(photo_id: int):
                         img = img.transpose(Image.FLIP_LEFT_RIGHT)
                         if orientation in (5, 7):
                             img = img.rotate(90 if orientation == 5 else 270, expand=True)
-            
+
             if img.mode != "RGB":
                 img = img.convert("RGB")
-                
+
             # Limit max size to 4K to speed up JPEG encoding and reduce memory footprint
             # while still maintaining visually "full" quality on modern screens.
             img.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
-                
-            # Save to cache file with quality=85
-            img.save(cached_path, format="JPEG", quality=85, optimize=True)
-            
-        await asyncio.to_thread(convert_to_jpeg)
+
+            # Write to a temp file, then swap into place so a concurrent
+            # reader can never observe a partially written JPEG.
+            tmp_path = cached_path + ".tmp"
+            img.save(tmp_path, format="JPEG", quality=85, optimize=True)
+            img.close()
+            os.replace(tmp_path, cached_path)
+
+        async with _render_lock:
+            # Re-check under the lock: a concurrent request may have finished
+            # rendering while we waited.
+            if not os.path.exists(cached_path):
+                await asyncio.to_thread(convert_to_jpeg)
         
         return FileResponse(
             cached_path,
@@ -824,11 +867,26 @@ async def get_config():
 
 @app.post("/api/scan/start")
 async def api_start_scan():
-    """Start an incremental scan."""
-    if scan_state["status"] in ("scanning", "generating_thumbnails", "geocoding"):
+    """Start an incremental scan (also re-queues failed thumbnails)."""
+    if _scan_in_progress():
         return {"message": "Scan already in progress", "status": scan_state["status"]}
 
-    asyncio.create_task(_run_full_scan())
+    # An explicitly triggered scan is a retry opportunity for photos whose
+    # thumbnail generation previously failed (has_thumbnail = -1). Startup
+    # scans don't do this on purpose — a permanently broken file shouldn't
+    # loop forever on every boot.
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE photos SET has_thumbnail = 0 WHERE has_thumbnail = -1"
+        )
+        await db.commit()
+        if cursor.rowcount:
+            logger.info("Re-queued %d failed thumbnails for retry.", cursor.rowcount)
+    finally:
+        await db.close()
+
+    _start_scan()
     return {"message": "Scan started"}
 
 

@@ -4,11 +4,14 @@ Manages SQLite database for photo metadata storage and retrieval.
 """
 
 import aiosqlite
+import logging
 import os
 from typing import Optional, Union
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 _db_env = os.getenv("DB_PATH", "data/photos.db")
 if os.path.isabs(_db_env):
@@ -109,7 +112,12 @@ async def insert_photo(db: aiosqlite.Connection, photo_data: dict) -> Optional[i
         )
         await db.commit()
         return cursor.lastrowid if cursor.lastrowid else None
-    except Exception:
+    except Exception as e:
+        # INSERT OR IGNORE returns None for duplicates; a genuine failure
+        # would otherwise vanish silently and drop the photo from the index.
+        logger.warning(
+            "insert_photo failed for %s: %s", photo_data.get("filepath", "?"), e
+        )
         return None
 
 
