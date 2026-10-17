@@ -10,21 +10,13 @@ const dateFromInput = document.getElementById("date-from");
 const dateToInput = document.getElementById("date-to");
 const searchInput = document.getElementById("search-input");
 
-let sidebarTimer = null;
-
 export function closeMobileSidebar() {
   const sidebar = document.getElementById("sidebar");
   const sidebarOverlay = document.getElementById("sidebar-overlay");
   if (sidebar && sidebarOverlay) {
     sidebar.classList.remove("open");
     sidebarOverlay.classList.remove("show");
-    if (sidebarTimer) clearTimeout(sidebarTimer);
   }
-}
-
-export function resetSidebarTimer() {
-  if (sidebarTimer) clearTimeout(sidebarTimer);
-  sidebarTimer = setTimeout(closeMobileSidebar, 5000);
 }
 
 export async function loadTimeline() {
@@ -58,7 +50,6 @@ export function renderTimeline() {
     if (dateFromInput) dateFromInput.value = "";
     if (dateToInput) dateToInput.value = "";
     resetAndReload();
-    resetSidebarTimer();
     setActiveSidebarItem(sidebarTimeline, allItem);
   });
   if (!state.dateFrom && !state.dateTo) {
@@ -90,7 +81,6 @@ export function renderTimeline() {
       if (dateFromInput) dateFromInput.value = state.dateFrom;
       if (dateToInput) dateToInput.value = state.dateTo;
       resetAndReload();
-      resetSidebarTimer();
       
       renderTimeline();
     });
@@ -123,7 +113,6 @@ export function renderTimeline() {
              if (dateFromInput) dateFromInput.value = isUndet ? "" : day.date;
              if (dateToInput) dateToInput.value = isUndet ? "" : day.date;
              resetAndReload();
-             resetSidebarTimer();
              renderTimeline();
           }, { indentLevel: 1 });
           if (state.dateFrom === day.date && state.dateTo === day.date) {
@@ -206,7 +195,6 @@ export function renderLocations() {
       state.activeCountry = countryEn;
       clearSearch();
       resetAndReload();
-      resetSidebarTimer();
       
       renderLocations();
     }, { isExpandable: true, isExpanded: isExpanded });
@@ -251,7 +239,6 @@ export function renderLocations() {
            state.activeCountry = countryEn;
            clearSearch();
            resetAndReload();
-           resetSidebarTimer();
            renderLocations();
         });
         if (state.activeCity === cityKey) cityItem.classList.add("active");

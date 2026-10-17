@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { applyTranslations } from './i18n.js';
 import { updateStats, setSwitchState } from './utils.js';
 import { loadPhotos, resetAndReload, setupInfiniteScroll, requestNextPage } from './gallery.js';
-import { loadTimeline, loadLocations, closeMobileSidebar, resetSidebarTimer } from './sidebar.js';
+import { loadTimeline, loadLocations, closeMobileSidebar } from './sidebar.js';
 import { closeModal, renderModalContent, setupModalEvents } from './modal.js';
 import { initAutoplay } from './autoplay.js';
 
@@ -99,7 +99,6 @@ function setupFilters() {
       const filter = this.dataset.filter;
       state.activeFilter = filter;
       resetAndReload();
-      resetSidebarTimer();
     });
   });
 
@@ -146,7 +145,6 @@ function setupFilters() {
     mobileMenuBtn.addEventListener("click", function () {
       sidebar.classList.add("open");
       sidebarOverlay.classList.add("show");
-      resetSidebarTimer();
     });
     sidebarOverlay.addEventListener("click", function () {
       closeMobileSidebar();
