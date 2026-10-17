@@ -1049,17 +1049,28 @@ select:focus-visible,
   word-break: break-all;
 }
 
-/* Autoplay Toolbar (below modal info title) */
+/* Slideshow control strip. It stays a permanent direct child of
+   #modal-backdrop (no DOM moves, so rebuilds of the info panel and the
+   mobile drawer can never swallow it) and docks top-center, below the
+   close / favorite control row. .visible is toggled on modal open/close. */
 .modal-autoplay-toolbar {
-  display: flex;
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: none;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   background: var(--bg-glass, rgba(255,255,255,0.08));
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md, 8px);
-  padding: 12px;
-  margin-bottom: var(--space-lg);
+  padding: 10px 14px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  max-width: min(92vw, 540px);
+}
+.modal-autoplay-toolbar.visible {
+  display: flex;
 }
 
 .mat-header {
@@ -1079,14 +1090,16 @@ select:focus-visible,
 
 .mat-controls {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .mat-duration {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
 }
 
@@ -1097,7 +1110,7 @@ select:focus-visible,
 }
 
 .mat-duration input[type="range"] {
-  flex: 1;
+  flex: 0 0 84px;
   accent-color: var(--accent-purple, #7c3aed);
   cursor: pointer;
 }
@@ -1615,7 +1628,7 @@ select:focus-visible,
   margin-top: 5px;
 }
 .mat-select {
-  flex: 1;
+  flex: 0 0 auto;
 }
 
 /* Segmented Control for Autoplay Config */

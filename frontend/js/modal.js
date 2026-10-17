@@ -55,11 +55,10 @@ export function closeModal() {
   });
   modalImageContainer.classList.remove("has-video");
 
-  // Rescue toolbar before clearing info
-  const toolbar = document.getElementById("modal-autoplay-toolbar");
-  if (toolbar) {
-      document.body.appendChild(toolbar);
-  }
+  // The slideshow strip is a permanent backdrop child - no rescue needed,
+  // just hide it until the next photo opens.
+  const toolbar = $("modal-autoplay-toolbar");
+  if (toolbar) toolbar.classList.remove("visible");
 
   modalInfo.replaceChildren();
   // Leave the mobile info drawer closed for the next open.
@@ -211,12 +210,11 @@ function renderModalInfo(photo) {
   const modalInfo = $("modal-info");
   const modalImageContainer = $("modal-image-container");
   
-  // Rescue the toolbar so it doesn't get wiped
-  const toolbar = document.getElementById("modal-autoplay-toolbar");
-  if (toolbar) {
-      document.body.appendChild(toolbar);
-  }
-  
+  // The slideshow strip stays a direct child of the backdrop; showing it
+  // is a pure class toggle, nothing to move out of the way here.
+  const toolbar = $("modal-autoplay-toolbar");
+  if (toolbar) toolbar.classList.add("visible");
+
   modalInfo.replaceChildren();
 
   const titleContainer = document.createElement("div");
@@ -231,11 +229,6 @@ function renderModalInfo(photo) {
   title.textContent = photo.filename || "Untitled";
   titleContainer.appendChild(title);
   modalInfo.appendChild(titleContainer);
-
-  if (toolbar) {
-      toolbar.style.display = "flex";
-      modalInfo.appendChild(toolbar);
-  }
 
   if (photo.display_location) {
     const loc = document.createElement("div");
