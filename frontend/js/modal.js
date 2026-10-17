@@ -1,9 +1,9 @@
 import { state } from './state.js';
-import { api } from './api.js';
 import { t } from './i18n.js';
 import { $, formatDate, formatTime, formatFileSize, formatDuration } from './utils.js';
 import { isAutoplaying, startAutoplayFromCurrent, stopAutoplay } from './autoplay.js';
 import { requestNextPage } from './gallery.js';
+import { toggleFavorite } from './favorites.js';
 
 const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
 
@@ -302,43 +302,11 @@ function renderModalInfo(photo) {
     ? `⭐ ${t("unfavorite_btn")}` 
     : `☆ ${t("favorite_btn")}`;
 
-  async function handleToggleFavorite() {
-    try {
-      const res = await api(`/api/photos/${photo.id}/favorite`, { method: "POST" });
-      if (res && res.success) {
-        photo.is_favorite = res.is_favorite ? 1 : 0;
-        topFavBtn.classList.toggle("active", !!photo.is_favorite);
-        topFavBtn.innerHTML = photo.is_favorite ? "★" : "☆";
-        const title = photo.is_favorite ? t("unfavorite_btn") : t("favorite_btn");
-        topFavBtn.title = title;
-        topFavBtn.setAttribute("aria-label", title);
-
-        favActionBtn.classList.toggle("active", !!photo.is_favorite);
-        favActionBtn.innerHTML = photo.is_favorite 
-          ? `⭐ ${t("unfavorite_btn")}` 
-          : `☆ ${t("favorite_btn")}`;
-
-        const card = document.querySelector(`.photo-card[data-id="${photo.id}"]`);
-        if (card) {
-          const cardFavBtn = card.querySelector(".photo-card-fav-btn");
-          if (cardFavBtn) {
-            cardFavBtn.classList.toggle("active", !!photo.is_favorite);
-            cardFavBtn.innerHTML = photo.is_favorite ? "★" : "☆";
-            cardFavBtn.title = title;
-            cardFavBtn.setAttribute("aria-label", title);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Failed to toggle favorite:", err);
-    }
-  }
-
   topFavBtn.onclick = (e) => {
     e.stopPropagation();
-    handleToggleFavorite();
+    toggleFavorite(photo);
   };
-  favActionBtn.onclick = handleToggleFavorite;
+  favActionBtn.onclick = () => toggleFavorite(photo);
 
   modalImageContainer.appendChild(topFavBtn);
   actionsSection.appendChild(favActionBtn);
@@ -412,6 +380,31 @@ function addInfoRow(section, label, value) {
 
   section.appendChild(row);
 }
+
+// Keep the modal's favorite buttons in sync when the state is toggled
+// anywhere (card button or the modal itself) — see favorites.js.
+document.addEventListener("favorite-changed", function (e) {
+  const current = state.photos[state.modalPhotoIndex];
+  if (!current || current.id !== e.detail.photoId) return;
+  const isFavorite = e.detail.isFavorite;
+
+  const topFavBtn = document.querySelector(".modal-top-fav-btn");
+  if (topFavBtn) {
+    topFavBtn.classList.toggle("active", isFavorite);
+    topFavBtn.innerHTML = isFavorite ? "★" : "☆";
+    const title = isFavorite ? t("unfavorite_btn") : t("favorite_btn");
+    topFavBtn.title = title;
+    topFavBtn.setAttribute("aria-label", title);
+  }
+
+  const favActionBtn = document.querySelector(".modal-fav-btn");
+  if (favActionBtn) {
+    favActionBtn.classList.toggle("active", isFavorite);
+    favActionBtn.innerHTML = isFavorite
+      ? `⭐ ${t("unfavorite_btn")}`
+      : `☆ ${t("favorite_btn")}`;
+  }
+});
 
 let modalEventsInitialized = false;
 export function setupModalEvents() {

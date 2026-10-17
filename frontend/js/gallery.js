@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { t } from './i18n.js';
 import { $, formatDateLabel, formatDuration, createEmptyState } from './utils.js';
 import { openModal } from './modal.js';
+import { toggleFavorite } from './favorites.js';
 
 let galleryObserver = null;
 const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
@@ -103,7 +104,7 @@ function renderCardContent(card, photo) {
   favBtn.setAttribute("aria-label", favTitle);
   favBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleFavorite(photo, favBtn, card);
+    toggleFavorite(photo);
   });
   card.appendChild(favBtn);
 }
@@ -398,33 +399,33 @@ export function syncFilterUI() {
   if (sortToggle) sortToggle.classList.toggle("active", state.sortOrder === "asc");
 }
 
-export async function toggleFavorite(photo, favBtn, card) {
-  try {
-    const res = await api(`/api/photos/${photo.id}/favorite`, { method: "POST" });
-    if (res && res.success) {
-      photo.is_favorite = res.is_favorite ? 1 : 0;
-      if (favBtn) {
-        favBtn.classList.toggle("active", !!photo.is_favorite);
-        favBtn.innerHTML = photo.is_favorite ? "★" : "☆";
-        const label = photo.is_favorite ? t("unfavorite_btn") : t("favorite_btn");
-        favBtn.title = label;
-        favBtn.setAttribute("aria-label", label);
-      }
-      // If currently filtered by favorites and unfavorited, animate card removal
-      if (state.activeFilter === "favorites" && !photo.is_favorite && card) {
-        card.style.transition = "opacity 0.25s ease, transform 0.25s ease";
-        card.style.opacity = "0";
-        card.style.transform = "scale(0.9)";
-        setTimeout(() => {
-          card.remove();
-          const gallery = $("gallery");
-          if (gallery && !gallery.querySelector(".photo-card")) {
-            gallery.replaceChildren(createEmptyState("⭐", t("no_favorites"), t("no_favorites_hint")));
-          }
-        }, 250);
-      }
-    }
-  } catch (err) {
-    console.error("Failed to toggle favorite:", err);
+// One toggle -> one "favorite-changed" event -> every view updates itself.
+// The card button state lives here; the modal keeps its own subscriber.
+document.addEventListener("favorite-changed", function (e) {
+  const { photoId, isFavorite } = e.detail;
+  const card = document.querySelector(`.photo-card[data-id="${photoId}"]`);
+  if (!card) return;
+
+  const favBtn = card.querySelector(".photo-card-fav-btn");
+  if (favBtn) {
+    favBtn.classList.toggle("active", isFavorite);
+    favBtn.innerHTML = isFavorite ? "★" : "☆";
+    const label = isFavorite ? t("unfavorite_btn") : t("favorite_btn");
+    favBtn.title = label;
+    favBtn.setAttribute("aria-label", label);
   }
-}
+
+  // If currently filtered by favorites and unfavorited, animate card removal
+  if (state.activeFilter === "favorites" && !isFavorite) {
+    card.style.transition = "opacity 0.25s ease, transform 0.25s ease";
+    card.style.opacity = "0";
+    card.style.transform = "scale(0.9)";
+    setTimeout(() => {
+      card.remove();
+      const gallery = $("gallery");
+      if (gallery && !gallery.querySelector(".photo-card")) {
+        gallery.replaceChildren(createEmptyState("⭐", t("no_favorites"), t("no_favorites_hint")));
+      }
+    }, 250);
+  }
+});
