@@ -678,13 +678,13 @@ body.theme-dark .toggle-pill-bg {
 .modal-fav-btn {
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-medium);
   transition: all var(--transition-fast);
 }
 
 .modal-fav-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
+  background: var(--bg-glass-hover);
+  border-color: var(--accent-purple);
 }
 
 .modal-fav-btn.active {
@@ -696,6 +696,35 @@ body.theme-dark .toggle-pill-bg {
 
 .modal-fav-btn.active:hover {
   background: rgba(245, 158, 11, 0.25);
+}
+
+/* Live Photo / Motion Photo badge in the photo modal */
+.modal-live-badge {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-weight: bold;
+  font-size: 0.9rem;
+  cursor: pointer;
+  z-index: 5;
+  user-select: none;
+  color: var(--text-primary);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.modal-live-badge:hover,
+.modal-live-badge.playing {
+  background: var(--accent-purple);
+  color: #fff;
+  border-color: var(--accent-purple);
 }
 
 /* Live Photo video overlay */

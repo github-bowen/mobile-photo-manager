@@ -1,7 +1,7 @@
 import { state } from './state.js';
-import { $ } from './utils.js';
-import { loadPhotos, requestNextPage } from './gallery.js';
-import { openModal, closeModal, renderModalContent } from './modal.js';
+import { $, createEmptyState } from './utils.js';
+import { loadPhotos, requestNextPage, syncFilterUI } from './gallery.js';
+import { openModal, renderModalContent, playCurrentLive } from './modal.js';
 import { t } from './i18n.js';
 
 let autoplayTimer = null;
@@ -23,7 +23,6 @@ export function initAutoplay() {
 
   if (btn) {
     btn.addEventListener('click', function(event) {
-      console.log('Autoplay button clicked');
       openAutoplayConfig(event);
     });
   }
@@ -58,12 +57,10 @@ export function initAutoplay() {
 
 function openAutoplayConfig() {
   const modal = $('autoplay-config-modal');
-  console.log('openAutoplayConfig called, modal element:', modal);
   if (!modal) {
-    console.error('Modal element not found');
+    console.error('Slideshow config modal element not found');
     return;
   }
-  console.log('Modal current display:', modal.style.display);
   
   // Pre-fill dates
   $('autoplay-date-from').value = state.dateFrom || "";
@@ -189,7 +186,7 @@ async function startAutoplay() {
       loadingEl.style.padding = "40px";
       loadingEl.style.textAlign = "center";
       loadingEl.style.color = "var(--text-muted)";
-      loadingEl.textContent = "⏳ Preparing slideshow...";
+      loadingEl.textContent = t("preparing_slideshow");
       gallery.appendChild(loadingEl);
   }
   
@@ -205,8 +202,15 @@ async function startAutoplay() {
     autoplayLoop();
   } else {
     stopAutoplay();
-    alert(`No photos found for the selected criteria. (Country: ${state.activeCountry || "None"})`);
+    const gallery = $('gallery');
+    if (gallery) {
+      gallery.replaceChildren(createEmptyState("🔍", t("no_photos_criteria"), t("adjust_filters")));
+    }
   }
+
+  // The config above rewrote state.dateFrom/dateTo/sort/filter behind the
+  // header UI's back — reflect the new values into the controls.
+  syncFilterUI();
 }
 
 async function autoplayLoop() {
@@ -265,19 +269,17 @@ async function autoplayLoop() {
       let videoEl = Array.from(modalMedia).find(el => el.tagName === "VIDEO");
       
       if (!videoEl && (photo.is_live_photo || photo.is_motion_photo)) {
-         // trigger live photo play badge
-         const badge = $('modal-live-badge');
-         if (badge && badge.textContent === t('play_live')) {
-             badge.click();
-         }
+         // Programmatic Live/Motion playback: muted so browser autoplay
+         // policy allows it.
+         playCurrentLive(true);
          // Give it a moment to inject video
          setTimeout(() => {
             const newMedia = document.querySelectorAll('.modal-media, video');
             videoEl = Array.from(newMedia).find(el => el.tagName === "VIDEO");
-            waitForVideo(videoEl, durationMs);
+            waitForVideo(videoEl, durationMs, photo.id);
          }, 300);
       } else {
-         waitForVideo(videoEl, durationMs);
+         waitForVideo(videoEl, durationMs, photo.id);
       }
     }, 200);
   } else {
@@ -286,19 +288,35 @@ async function autoplayLoop() {
   }
 }
 
-function waitForVideo(videoEl, fallbackMs) {
+function isCurrentSlide(photoId) {
+    const current = state.photos[state.modalPhotoIndex];
+    return !!current && current.id === photoId && isAutoplaying;
+}
+
+function waitForVideo(videoEl, fallbackMs, slidePhotoId) {
     if (autoplayTimer) clearTimeout(autoplayTimer);
     if (videoEl) {
-        // Ensure it is playing
-        if (videoEl.paused) videoEl.play().catch(e => {});
-        videoEl.onended = () => {
-            if (autoplayTimer) clearTimeout(autoplayTimer);
-            if (isAutoplaying) autoplayTimer = setTimeout(nextSlide, 500); // 500ms pause after video
-        };
-        videoEl.onerror = () => {
-            if (autoplayTimer) clearTimeout(autoplayTimer);
-            if (isAutoplaying) autoplayTimer = setTimeout(nextSlide, fallbackMs);
+        // Ensure it is playing. If the browser blocks the play() call, fall
+        // back to a timed advance so the slideshow never stalls on it.
+        if (videoEl.paused) {
+            videoEl.play().catch(() => {
+                if (isCurrentSlide(slidePhotoId)) {
+                    autoplayTimer = setTimeout(nextSlide, fallbackMs);
+                }
+            });
         }
+        // addEventListener (not onended=) so modal.js's own handlers
+        // survive; advance only if this video is still the current slide.
+        videoEl.addEventListener("ended", function () {
+            if (!isCurrentSlide(slidePhotoId)) return;
+            if (autoplayTimer) clearTimeout(autoplayTimer);
+            autoplayTimer = setTimeout(nextSlide, 500); // 500ms pause after video
+        });
+        videoEl.addEventListener("error", function () {
+            if (!isCurrentSlide(slidePhotoId)) return;
+            if (autoplayTimer) clearTimeout(autoplayTimer);
+            autoplayTimer = setTimeout(nextSlide, fallbackMs);
+        });
     } else {
         autoplayTimer = setTimeout(nextSlide, fallbackMs);
     }

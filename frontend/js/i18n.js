@@ -90,7 +90,12 @@ export const i18n = {
     autoplay_cancel: "Cancel",
     autoplay_start: "▶ Start Slideshow",
     play_live: "▶ Play",
-    playing_live: "PLAYING..."
+    playing_live: "PLAYING...",
+    error_lbl: "Error",
+    original_loaded: " (Loaded)",
+    load_error: "Error loading original",
+    preparing_slideshow: "⏳ Preparing slideshow...",
+    no_photos_criteria: "No photos match the selected criteria. Adjust the slideshow configuration and try again."
   },
   zh: {
     app_title: "iPhone 照片管理",
@@ -181,7 +186,12 @@ export const i18n = {
     autoplay_cancel: "取消",
     autoplay_start: "▶ 开始播放",
     play_live: "▶ 播放",
-    playing_live: "播放中..."
+    playing_live: "播放中...",
+    error_lbl: "出错了",
+    original_loaded: " (已加载)",
+    load_error: "原图加载失败",
+    preparing_slideshow: "⏳ 正在准备幻灯片...",
+    no_photos_criteria: "没有符合所选条件的照片，请调整幻灯片设置后重试。"
   }
 };
 

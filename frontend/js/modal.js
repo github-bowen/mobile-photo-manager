@@ -1,11 +1,21 @@
 import { state } from './state.js';
 import { t } from './i18n.js';
 import { $, formatDate, formatTime, formatFileSize, formatDuration } from './utils.js';
-import { isAutoplaying, startAutoplayFromCurrent, stopAutoplay } from './autoplay.js';
 import { requestNextPage } from './gallery.js';
 import { toggleFavorite } from './favorites.js';
 
 const VIDEO_TYPES = new Set(["MOV", "MP4", "3GP"]);
+
+// Points at the play function of the currently displayed Live/Motion photo so
+// the slideshow can trigger playback programmatically (muted, to satisfy
+// browser autoplay policy) instead of poking the badge DOM.
+let currentPlayLive = null;
+
+export function playCurrentLive(muted) {
+  if (typeof currentPlayLive === "function") {
+    currentPlayLive({ muted: !!muted });
+  }
+}
 
 export function openModal(index) {
   if (!state.photos || state.photos.length === 0) return;
@@ -20,6 +30,7 @@ export function openModal(index) {
 
 export function closeModal() {
   state.modalPhotoIndex = -1;
+  currentPlayLive = null;
   const modalBackdrop = $("modal-backdrop");
   const modalImageContainer = $("modal-image-container");
   const modalInfo = $("modal-info");
@@ -111,28 +122,19 @@ export function renderModalContent() {
               : "/api/photos/" + photo.id + "/thumbnail/medium";
     wrapper.appendChild(img);
 
+    currentPlayLive = null;
     if (photo.is_live_photo || photo.is_motion_photo) {
       const liveBadge = document.createElement("div");
       liveBadge.id = "modal-live-badge";
+      liveBadge.className = "modal-live-badge";
       liveBadge.textContent = t("play_live");
-      liveBadge.style.position = "absolute";
-      liveBadge.style.top = "20px";
-      liveBadge.style.left = "20px";
-      liveBadge.style.background = "rgba(255,255,255,0.8)";
-      liveBadge.style.color = "#000";
-      liveBadge.style.padding = "4px 8px";
-      liveBadge.style.borderRadius = "4px";
-      liveBadge.style.fontWeight = "bold";
-      liveBadge.style.cursor = "pointer";
-      liveBadge.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
-      liveBadge.style.transition = "background 0.2s";
       
       let isPlaying = false;
-      const playLive = () => {
+      const playLive = (opts = {}) => {
           if (isPlaying) return;
           isPlaying = true;
           liveBadge.textContent = t("playing_live");
-          liveBadge.style.background = "rgba(255,255,255,1)";
+          liveBadge.classList.add("playing");
           
           const video = document.createElement("video");
           video.style.position = "absolute";
@@ -142,25 +144,32 @@ export function renderModalContent() {
           video.style.height = "100%";
           video.style.objectFit = "contain";
           video.autoplay = true;
+          video.muted = !!opts.muted;
           video.src = "/api/photos/" + photo.id +
             (photo.is_motion_photo ? "/motion-video" : "/live-video");
           
-          video.onended = () => {
+          // addEventListener (not onended=/onerror=) so the slideshow's own
+          // handlers in autoplay.js coexist with ours instead of being
+          // silently overwritten.
+          video.addEventListener("ended", function () {
               liveBadge.textContent = t("play_live");
+              liveBadge.classList.remove("playing");
               isPlaying = false;
               video.remove();
               img.style.visibility = "visible";
-          };
-          video.onerror = () => {
+          });
+          video.addEventListener("error", function () {
               liveBadge.textContent = t("error_lbl");
+              liveBadge.classList.remove("playing");
               isPlaying = false;
-          };
+          });
           
           img.style.visibility = "hidden";
           wrapper.appendChild(video);
       };
 
-      liveBadge.onclick = (e) => { e.stopPropagation(); playLive(); };
+      currentPlayLive = playLive;
+      liveBadge.addEventListener("click", function (e) { e.stopPropagation(); playLive(); });
       wrapper.appendChild(liveBadge);
     }
     
@@ -202,11 +211,6 @@ function renderModalInfo(photo) {
   if (toolbar) {
       toolbar.style.display = "flex";
       modalInfo.appendChild(toolbar);
-      
-      const modalSortOrder = document.getElementById("modal-autoplay-sort-order");
-      if (modalSortOrder && state.sortOrder) {
-          modalSortOrder.value = state.sortOrder;
-      }
   }
 
   if (photo.display_location) {
@@ -328,7 +332,7 @@ function renderModalInfo(photo) {
                window.open("/api/photos/" + photo.id + "/file", "_blank");
                return;
            }
-           viewOriginalBtn.textContent = t("loading") || "Loading...";
+           viewOriginalBtn.textContent = t("loading");
            viewOriginalBtn.disabled = true;
            viewOriginalBtn.style.opacity = "0.7";
            
@@ -337,10 +341,10 @@ function renderModalInfo(photo) {
                const newImg = new Image();
                newImg.onload = () => {
                    imgElement.src = newImg.src;
-                   viewOriginalBtn.textContent = t("view_original") + " (Loaded)";
+                   viewOriginalBtn.textContent = t("view_original") + t("original_loaded");
                };
                newImg.onerror = () => {
-                   viewOriginalBtn.textContent = "Error loading original";
+                   viewOriginalBtn.textContent = t("load_error");
                    viewOriginalBtn.disabled = false;
                    viewOriginalBtn.style.opacity = "1";
                };
