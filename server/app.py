@@ -1195,15 +1195,21 @@ def _build_hashed_index() -> bytes:
         html = f.read()
 
     def _reversion(match):
-        url = match.group(1)
-        asset_path = os.path.join(FRONTEND_DIR, url.split("?", 1)[0].lstrip("/"))
+        # The match covers the whole 'href="..."' / 'src="..."' attribute,
+        # so the replacement must rebuild the attribute prefix too —
+        # dropping it mangles the tag into <link rel="stylesheet" /index.css…">
+        # and the asset silently stops loading.
+        attr = match.group("attr")
+        url = match.group("path")
+        asset_path = os.path.join(FRONTEND_DIR, url.lstrip("/"))
         if not os.path.isfile(asset_path):
             return match.group(0)
         with open(asset_path, "rb") as f:
             digest = hashlib.sha1(f.read()).hexdigest()[:10]
-        return f'{match.group(1).split("?", 1)[0]}?v={digest}"'
+        return f'{attr}{url}?v={digest}"'
 
-    html = re.sub(r'(?:href|src)="(/[^"?]+)\?v=\d+"', _reversion, html)
+    html = re.sub(
+        r'(?P<attr>(?:href|src)=")(?P<path>/[^"?]+)\?v=\d+"', _reversion, html)
     return html.encode("utf-8")
 
 
