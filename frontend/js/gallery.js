@@ -121,15 +121,11 @@ function restoreCard(placeholder) {
   const card = cardPool.pop() || buildNewCard();
   card.setAttribute("data-id", photo.id);
 
-  // Suppress the fadeIn animation for one frame so restored cards don't
-  // replay the entry animation as the user scrolls back.
-  card.classList.add("no-anim");
+  // Restored cards appear instantly. A temporary class removed on the next
+  // frame wouldn't work — CSS would treat the none->fadeIn change as a new
+  // animation and replay the entry fade one frame later.
+  card.style.animation = "none";
   placeholder.replaceWith(card);
-  requestAnimationFrame(function () {
-    requestAnimationFrame(function () {
-      card.classList.remove("no-anim");
-    });
-  });
 
   galleryObserver.observe(card);
   farObserver.observe(card);
@@ -315,6 +311,16 @@ export function renderGallery(append) {
 
   const groups = groupByDate(append ? getNewPhotos() : state.photos);
 
+  // Batch inserts: new date groups and their cards accumulate in fragments
+  // and attach once, so a full render causes one layout pass instead of a
+  // reflow per card. For big rebuilds (>500 cards) the staggered fadeIn is
+  // skipped outright — inline animation:none on those cards; a container
+  // class removed on the next frame would restart the animation on all of
+  // them at once (CSS treats a none->fadeIn change as a brand-new
+  // animation), which is the flash this batch is meant to prevent.
+  const bulk = !append && state.photos.length > 500;
+  const newGroups = document.createDocumentFragment();
+
   for (const [date, photos] of Object.entries(groups)) {
     let groupEl = append ? gallery.querySelector(`[data-date="${CSS.escape(date)}"]`) : null;
     let gridEl;
@@ -369,15 +375,22 @@ export function renderGallery(append) {
       gridEl.className = "gallery-grid";
       groupEl.appendChild(gridEl);
 
-      gallery.appendChild(groupEl);
+      newGroups.appendChild(groupEl);
     } else {
       gridEl = groupEl.querySelector(".gallery-grid");
     }
 
+    const cards = document.createDocumentFragment();
     for (const photo of photos) {
       const card = createPhotoCard(photo);
-      gridEl.appendChild(card);
+      if (bulk) card.style.animation = "none";
+      cards.appendChild(card);
     }
+    gridEl.appendChild(cards);
+  }
+
+  if (newGroups.childElementCount > 0) {
+    gallery.appendChild(newGroups);
   }
 }
 

@@ -1302,12 +1302,6 @@ body {
   animation: fadeIn var(--transition-normal) ease both;
 }
 
-/* Pool-restored cards must not replay the entry animation. */
-.photo-card.no-anim,
-.photo-card.no-anim:hover {
-  animation: none;
-}
-
 .gallery-date-group:nth-child(1) .photo-card { animation-delay: 0ms; }
 .gallery-date-group:nth-child(2) .photo-card { animation-delay: 50ms; }
 .gallery-date-group:nth-child(3) .photo-card { animation-delay: 100ms; }
