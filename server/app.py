@@ -50,37 +50,130 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(BASE_DIR)
 
-# Translation cache
+# Translations: persisted to disk so each distinct string is translated at
+# most once per language.
 TRANSLATION_CACHE_FILE = os.path.join(PROJECT_DIR, "data", "translation_cache.json")
+TRANSLATION_FLUSH_DEBOUNCE = float(os.getenv("TRANSLATION_FLUSH_DEBOUNCE", "5"))
+# Above this many distinct strings, /api/locations serves raw names instead
+# of firing one external translation call per place.
+TRANSLATE_MAX_ITEMS = int(os.getenv("TRANSLATE_MAX_ITEMS", "300"))
 
-def load_translation_cache():
-    if os.path.exists(TRANSLATION_CACHE_FILE):
+
+class TranslationCache:
+    """In-memory translation cache with debounced, atomic disk flushes.
+
+    The previous design rewrote the whole JSON file after every single
+    translated string (a full-file write per entry, quadratic overall) and
+    linearly rescanned the entire cache on every /api/photos request to
+    expand a location filter into its known originals. Reverse indexes on
+    the lowercased original and translated forms keep that lookup off the
+    request path; disk writes are debounced and atomic (.tmp + os.replace).
+    """
+
+    def __init__(self, path: str, debounce_seconds: float = TRANSLATION_FLUSH_DEBOUNCE):
+        self.path = path
+        self.debounce_seconds = debounce_seconds
+        self._entries: dict = {}          # (original, lang) -> translated
+        self._by_original: dict = {}      # original.lower() -> {originals}
+        self._by_translated: dict = {}    # translated.lower() -> {originals}
+        self._dirty = False
+        self._flush_handle: Optional[asyncio.TimerHandle] = None
+        self._load()
+
+    def _load(self):
+        if not os.path.exists(self.path):
+            return
         try:
-            with open(TRANSLATION_CACHE_FILE, "r", encoding="utf-8") as f:
+            with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return {tuple(k.split("|||")): v for k, v in data.items() if "|||" in k}
+            for key, translated in data.items():
+                if "|||" not in key:
+                    continue
+                original, lang = key.split("|||", 1)
+                self._entries[(original, lang)] = translated
+                self._by_original.setdefault(original.lower(), set()).add(original)
+                self._by_translated.setdefault(translated.lower(), set()).add(original)
         except Exception as e:
-            logger.warning(f"Failed to load translation cache: {e}")
-    return {}
+            logger.warning("Failed to load translation cache: %s", e)
 
-def save_translation_cache():
-    try:
-        os.makedirs(os.path.dirname(TRANSLATION_CACHE_FILE), exist_ok=True)
-        with open(TRANSLATION_CACHE_FILE, "w", encoding="utf-8") as f:
-            data = {f"{k[0]}|||{k[1]}": v for k, v in _translation_cache.items()}
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"Failed to save translation cache: {e}")
+    def get(self, text: str, target_lang: str) -> Optional[str]:
+        return self._entries.get((text, target_lang))
 
-_translation_cache = load_translation_cache()
+    def put(self, text: str, target_lang: str, translated: str) -> None:
+        self._entries[(text, target_lang)] = translated
+        self._by_original.setdefault(text.lower(), set()).add(text)
+        self._by_translated.setdefault(translated.lower(), set()).add(text)
+        self._dirty = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no running loop: flush() at shutdown still persists
+        if self._flush_handle is not None:
+            self._flush_handle.cancel()
+        self._flush_handle = loop.call_later(self.debounce_seconds, self._flush_now)
+
+    def _flush_now(self) -> None:
+        self._flush_handle = None
+        if not self._dirty:
+            return
+        self._dirty = False
+        snapshot = dict(self._entries)
+        try:
+            asyncio.get_running_loop().run_in_executor(None, self._save_sync, snapshot)
+        except RuntimeError:
+            self._save_sync(snapshot)
+
+    async def flush(self) -> None:
+        """Persist pending changes immediately (called at shutdown)."""
+        if self._flush_handle is not None:
+            self._flush_handle.cancel()
+            self._flush_handle = None
+        if not self._dirty:
+            return
+        self._dirty = False
+        await asyncio.to_thread(self._save_sync, dict(self._entries))
+
+    def _save_sync(self, entries: dict) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp_path = self.path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                data = {
+                    f"{original}|||{lang}": translated
+                    for (original, lang), translated in entries.items()
+                }
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.path)
+        except Exception as e:
+            logger.warning("Failed to save translation cache: %s", e)
+
+    def reverse_lookup(self, needle: str) -> list:
+        """Originals whose original or translated form contains needle.
+
+        Case-insensitive substring match, mirroring the old linear scan of
+        the whole cache. Used to expand a user-visible location filter to
+        the English originals stored in the database.
+        """
+        needle_lower = needle.lower()
+        matches: set = set()
+        for lower_original, originals in self._by_original.items():
+            if needle_lower in lower_original:
+                matches.update(originals)
+        for lower_translated, originals in self._by_translated.items():
+            if needle_lower in lower_translated:
+                matches.update(originals)
+        return sorted(matches)
+
+
+_translations = TranslationCache(TRANSLATION_CACHE_FILE)
 _translation_sem = asyncio.Semaphore(10)
 
 async def translate_text(text: str, target_lang: str = 'zh-CN') -> str:
     if not text:
         return text
-    cache_key = (text, target_lang)
-    if cache_key in _translation_cache:
-        return _translation_cache[cache_key]
+    cached = _translations.get(text, target_lang)
+    if cached is not None:
+        return cached
     try:
         async with _translation_sem:
             # Run GoogleTranslator in a thread pool since it's blocking
@@ -90,8 +183,7 @@ async def translate_text(text: str, target_lang: str = 'zh-CN') -> str:
                 ),
                 timeout=10.0
             )
-        _translation_cache[cache_key] = translated
-        await asyncio.to_thread(save_translation_cache)
+        _translations.put(text, target_lang, translated)
         return translated
     except asyncio.TimeoutError:
         logger.warning(f"Translation timeout for '{text}'")
@@ -214,6 +306,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_process_pending_tasks())
 
     yield
+
+    # Persist any translations still sitting in the debounced write queue.
+    await _translations.flush()
 
 
 app = FastAPI(title="iPhone Photo Manager", lifespan=lifespan)
@@ -473,13 +568,10 @@ async def api_get_photos(
     try:
         loc_param = None
         if location:
-            loc_candidates = [location]
-            loc_lower = location.lower()
-            for (orig, lang_code), translated in _translation_cache.items():
-                if loc_lower in translated.lower() or loc_lower in orig.lower():
-                    if orig not in loc_candidates:
-                        loc_candidates.append(orig)
-            loc_param = loc_candidates
+            loc_param = [location]
+            for original in _translations.reverse_lookup(location):
+                if original not in loc_param:
+                    loc_param.append(original)
 
         photos, total = await get_photos(
             db,
@@ -903,32 +995,35 @@ async def api_get_locations(lang: str = None):
     try:
         locations = await get_locations(db)
         target_lang = lang if lang else os.getenv("APP_LANGUAGE", "zh")
-        if target_lang == "zh":
-            unique_locs = {loc["location_name"] for loc in locations if loc.get("location_name")}
+        trans_map = {}
+        unique_locs = {loc["location_name"] for loc in locations if loc.get("location_name")}
+        if target_lang == "zh" and unique_locs:
             unique_countries = {loc.split(", ")[-1].strip() for loc in unique_locs}
             unique_cities = {loc.split(", ")[0].strip() for loc in unique_locs}
-            
             all_to_translate = unique_locs | unique_countries | unique_cities
-            translations = await asyncio.gather(*(translate_text(text) for text in all_to_translate))
-            trans_map = dict(zip(all_to_translate, translations))
-            
-            for loc in locations:
-                name = loc.get("location_name")
-                if name:
-                    raw_country = name.split(", ")[-1].strip()
-                    loc["display_location"] = trans_map[name]
-                    loc["display_country"] = trans_map[raw_country]
-                    loc["display_city"] = trans_map[name.split(", ")[0].strip()]
-                    loc["raw_country"] = raw_country  # Always store the raw (English) country for filtering
-        else:
-            for loc in locations:
-                name = loc.get("location_name")
-                if name:
-                    raw_country = name.split(", ")[-1].strip()
-                    loc["display_location"] = name
-                    loc["display_country"] = raw_country
-                    loc["display_city"] = name.split(", ")[0].strip()
-                    loc["raw_country"] = raw_country
+            if len(all_to_translate) <= TRANSLATE_MAX_ITEMS:
+                translations = await asyncio.gather(
+                    *(translate_text(text) for text in all_to_translate)
+                )
+                trans_map = dict(zip(all_to_translate, translations))
+            else:
+                # Serving raw names beats firing hundreds of external API
+                # calls in one request; entries still translate lazily as
+                # photos are browsed.
+                logger.info(
+                    "Skipping location translation: %d distinct strings exceed "
+                    "TRANSLATE_MAX_ITEMS=%d", len(all_to_translate), TRANSLATE_MAX_ITEMS
+                )
+
+        for loc in locations:
+            name = loc.get("location_name")
+            if name:
+                raw_country = name.split(", ")[-1].strip()
+                city = name.split(", ")[0].strip()
+                loc["display_location"] = trans_map.get(name, name)
+                loc["display_country"] = trans_map.get(raw_country, raw_country)
+                loc["display_city"] = trans_map.get(city, city)
+                loc["raw_country"] = raw_country  # Always store the raw (English) country for filtering
         return locations
     finally:
         await db.close()
